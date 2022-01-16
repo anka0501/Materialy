@@ -1,0 +1,179 @@
+---
+title: "Zaawansowane programowanie w R"
+author: "mgr Piotr Ä†wiakowski, dr Piotr WĂłjcik"
+date: "ZajÄ™cia 1-4"
+output: html_document
+---
+
+# Informacje wstępne
+
+1. Pracę domową 1-3 należy przesłać do *czwartku, 9 listopada 2017 r. do godz. 24.00* na adres \url{pcwiakowski@wne.uw.edu.pl}, w tytule wpisując imię i nazwisko, numer indeksu i hasło "Praca domowa - programowanie".
+
+1a. Pracę domową 4 należy przesłać do *piątku, 10 listopada 2017 r. do godz. 24.00*.
+
+2. Do wiadomości załączamy jedynie plik z naszym kodem (rozszerzenie .R).
+
+3. Na początku pliku umieszczamy w komentarzu krótką informację o tym co udało nam się zrobić, a co nie. Wykonanie wszystkich zadań na dane zajęcia daje 2\% punktów końcowych.
+
+4. W razie pytań i wątpliwości piszemy na adres \url{pcwiakowski@wne.uw.edu.pl}
+
+\begin{center}
+Powodzenia!
+\end{center}
+
+# Zajęcia 1.
+
+## Ćwiczenie 1.1. 
+
+W systemie S3 stwórz funkcję generyczną sumuj, która będzie odwoływała się do dwóch metod:
+
+a) sumuj.numeric (suma liczb dla wektora numerycznego)
+b) sumuj.character (sklejenie znaków wektora tekstowego)
+
+## Ćwiczenie 1.2. 
+
+Stwórz klasę typu S4. Zdefiniuj dla niej metodę i 3 pola.
+
+## Ćwiczenie 1.3. 
+
+Stwórz klasę typu RC. Zdefiniuj dla niej metodę i 3 pola.
+
+# Zajęcia 2.
+
+## Ćwiczenie 2.1. (łatwe)
+
+Napisz funkcję, która liczy odchylenie przeciętne.
+
+## Ćwiczenie 2.2.
+
+Napisz funkcję, która liczy współczynnik zmienności.
+
+## Ćwiczenie 2.3.
+
+Stwórz funkcję liczącą dominantę.
+
+## Ćwiczenie 2.4.
+
+Stwórz funkcję która liczy średnią ważoną.
+
+# Zajęcia 3. 
+
+## Ćwiczenie 3.1.
+
+Przerób poniższą funkcję tak, aby była odporna na niewłaściwe dane wejściowe:
+ 
+```{r eval = F}
+  moja_srednia <- function(x) {
+    result <- sum(x) / length(x)
+    return(result)
+    }
+```
+
+W tym celu:
+
+- dodaj asercje sprawdzające poprawność danych wejściowych,
+- dodaj osbługę braków danych (wyświetl informacje o liczbie braków, wyeliminuj je z obliczeń),
+- wyświetlaj ostrzeżenie, jeśli liczba niebrakujących obserwacji jest mniejsza niz 5,
+- sprawdź na gotowej funkcji za pomocą `has_error()`, `has_warning()`, czy zwraca błąd/warning w przypadku podania niepoprawnych danych wejściowych
+
+
+## Ćwiczenie 3.2.
+
+Biorąc za punkt wyjścia poniższy kod, napisz funkcję, która przeprowadza prostą walidację krzyżową modelu regresji liniowej (po kolei pomija po jednej obserwacji z danych, wykonuje dla niej oszacowanie modelu, zapisuje wartości parametrów i wyniki
+testów istotnosci, a także przeprowadza prognozę dla obserwacji zostawionej poza modelem i zapisuje błąd MAE tej prognozy). W tym celu:
+
+- użyj pętli,
+- wyświetlaj numer iteracji (pominiętej obserwacji),
+- dodaj obsługę braków danych,
+- dodaj sprawdzanie poprawności danych wejściowych,
+- niech tabela z wynikami modelu będzie niewidzialnym wynikiem funkcji,
+- niech drugim wynikiem funkcji będzie wykres pokazujący histogram wielkości błędu MAE, zapisywany do pliku o nazwie będącej argumentem funkcji,
+- upewnij się, że plik z histogramem będzie zamknięty niezależnie od poprawności danych wykorzystanych w funkcji `hist()`.
+
+```{r}
+# dane
+x1 <- runif(1000)
+x2 <- runif(1000)
+y <- 0.4 * x1 - 0.3 * x2 + rnorm(1000)/5
+dane <- data.frame(x1, x2, y)
+
+# model z pominieciem pierwszej obserwacji
+model_1 <- lm(y ~ x1 + x2, data = dane[-1,])
+
+coef_ <- (summary(model_1))$coefficients[, 1]
+pval_ <- (summary(model_1))$coefficients[, 4]
+prognoza <- predict(model_1, newdata = dane[1,])
+
+model_summary <- data.frame(obs = 1,
+                            t(coef_),
+                            t(pval_),
+                            prognoza)
+
+names(model_summary)[2:7] <- c("coef_int",
+                               "coef_x1",
+                               "coef_x2",
+                               "p_int",
+                               "p_x1",
+                               "p_x2")
+
+# tu bedzie po prostu blad prognozy - MAE mozna policzyc na calym zbiorze
+model_summary$blad_prognozy <- abs(dane$y[1] - prognoza)
+
+rm(model_1, coef_, pval_, prognoza)
+```
+
+## Ćwiczenie 3.3.
+Zdefiniuj operator %probka%, który będzie zwracal n elementową (argument2) probę z podanego wektóra (argument1). (wykorzystaj funkcję sample())
+
+## Ćwiczenie 3.4.
+Zdefiniuj operator %MA%, który będzie zwracał średnią ruchomą z wektóra (argument1) liczoną na podstawie n (argument2) wartości.
+
+
+# Zajęcia 4. 
+
+## Ćwiczenie 4.1.
+
+Sprawdź efektywność czasową różnych formuł liczących pierwiastek kwadratowy z wektora wartości. Porównaj wyniki dla wektorów różnej długości i typu (integer vs double). Sprawdź czy różne formuły dają dokładnie ten sam wynik.
+
+```{r}
+# przyklad
+x <- 1:10
+sqrt(x)
+x**(0.5)
+exp(log(x) / 2)
+```
+
+## Ćwiczenie 4.2.
+Porównaj efektywność czasową różnych wariantów odwoływania się do pojedynczego elementu z `data.frame` (patrz poniżej)
+
+```{r eval = FALSE}
+dane <- data.frame(x = rnorm(1e5))
+
+dane$x[10000]
+dane[10000, 1]
+dane[10000, "x"]
+dane[[c(1, 10000)]]
+dane[[1]][10000]
+.subset2(dane, select = 1)[10000]
+
+# https://stat.ethz.ch/R-manual/R-devel/library/base/html/base-internal.html
+```
+
+## Ćwiczenie 4.3.
+
+Napisz dwa (albo więcej) warianty funkcji znajdującej i wyświetlającej wszystkie liczby pierwsze z przedziału [2, n], gdzie n będzie jedynym argumentem funkcji.
+
+W jednym z wariantów wykorzystaj pętle po całym wektorze, w drugim możesz wykorzystać algorytm znany jako sito Erastotenesa: \url{https://pl.wikipedia.org/wiki/Sito_Eratostenes}
+
+Porównaj efektywność czasową obu funkcji PRZED i PO skompilowaniu do kodu bajtowego. Sprawdź identyczność uzyskanych wyników. Dokonaj profilowania kodu obu funkcji i opisz, które ich części zajmują najwięcej czasu.
+
+## Ćwiczenie 4.4.
+
+Przeanalizuj funkcje zapisaną w pliku *cwiczenie4_4.R*, aby zrozumieć co robi. W razie potrzeby zainstaluj odpowiednie pakiety. Sprawdź efektywność czasową kodu i dokonaj jego profilowania. Następnie napisz bardziej efektywną wersję funkcji. Ile razy szybciej się wykonuje? Czy wynik jest identyczny?
+
+```{r eval = FALSE}
+source("cwiczenie4_4.R")
+
+co_ja_robie(100)
+```
+

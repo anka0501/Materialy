@@ -1,0 +1,150 @@
+---
+title: "Badanie determinant wpływających na wysokość temperatury powietrza"
+subtitle: "Praca domowa numer 4"
+author: "Anna Głowacka"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+fontsize: 20pt
+geometry: vmargin=.7in,hmargin=.5in
+output: 
+  html_document:
+    toc: true
+    theme: journal
+    self_contained: true
+    toc_float: true
+  
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+## Wstęp 
+<br>
+Niniejsza praca jest poświęcona badaniu determinant wpływających na wysokość temperatury powietrza za maj 1973 roku. Dane wykorzystane do analizy pochodzą ze zbioru *airmay*. Zmienne są przedstawione w tabeli poniżej:
+
+Oznaczenie    | Nazwa
+------------- | ---------------------------------------------------------------------------------
+ Ozone        |  średnia zawartość ozonu (ppb)
+ Solar.R      |  promieniowanie słoneczne 
+ Wind         |  średnia prędkość wiatru w milach 
+ Temp         |  maksymalna dzienna temperatura w stopniach Fahrenheita 
+ Month        |  miesiąc (1-12)
+ Day          |  dzień (1-31)
+
+
+## Wstępna analiza danych
+
+Na początku wczytuję bazę danych i usuwam braki danych:
+
+```{r, warning=FALSE}
+data(airmay)
+
+```
+
+```{r, include=FALSE, echo=FALSE}
+library(MASS)
+library(lmtest)
+dane <- airquality
+mydata<-na.omit(dane)
+```
+
+
+Następnie wyliczam podstawowe statystyki opisowe:
+```{r, echo=FALSE}
+summary(mydata)
+```
+
+```{r, echo=FALSE, include=FALSE}
+library(aod)
+library(plotly)
+library(ggplot2)
+library(rvg)
+library(ggiraph)
+```
+
+### Temperatura powietrza w miesiącach od maja do września
+
+```{r , echo=FALSE, warning=FALSE}
+mytheme_main <- theme( panel.background = element_blank(), 
+  panel.grid.major = element_line(colour = "#dddddd"), 
+  axis.ticks = element_line(colour = "#dddddd") )
+
+mytheme_map <- theme(
+  panel.background = element_blank(), axis.title.x = element_blank(),
+  axis.text = element_blank(), axis.line.x = element_blank(),
+  axis.line.y = element_blank(), axis.title.y = element_blank(),
+  axis.ticks.x = element_blank(), axis.ticks.y = element_blank() )
+
+mydata$tooltip <- row.names(mydata)
+
+# Wizualizacja
+gg_point_1 <- ggplot(mydata, aes(x = Month, y = Temp, 
+         tooltip = tooltip ) ) + 
+    geom_point_interactive(size=3)
+
+
+# htmlwidget call
+ggiraph(code = {print(gg_point_1 + mytheme_main)}, height = 6)
+```
+
+```{r message=FALSE, include=FALSE}  
+library(plotly)  
+```
+
+
+### Prędkość wiatru z uwzględnieniem temperatury powietrza
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+plot_ly(mydata[mydata$Ship.Mode=="Prędkość wiatru",], x = mydata$Month, y = mydata$Wind, 
+              color= ~ mydata$Temp, mode = "markers")
+```
+
+### Średnia zawartość ozonu z uwzględnieniem temperatury powietrza
+
+```{r message=FALSE, warning=FALSE, echo=FALSE, include=FALSE}
+plot_ly(mydata[mydata$Ship.Mode=="Średnia zawartość ozonu",], x = mydata$Month , y = mydata$Ozone, 
+             color= ~ mydata$Temp, mode = "markers")
+```
+
+
+## Model regresji liniowej
+<br>
+W dalszej kolejności buduję model regresji liniowej, który pozwoli określić wpływ zmiennych objaśniających na zmienną objaśnianą Temp. W tym celu zostanie wykorzystany model regresji liniowej:
+
+```{r}
+model <- lm(Temp ~ ., data = mydata[,1:6])
+
+summary(model)
+```
+
+W modelu tylko zmienne Oznone i Month są istotne statycznie. Następnie zastowano regresje wsteczną w celu wybrania najlepszego modelu pod względem kryterium AIC:
+
+```{r}
+m <- stepAIC(model, direction = 'backward')
+```
+
+Najlepszy model to ten dla którego wartość kryterium informacyjnego jest najniższa. Na tej podstawie wybrano model trzeci do dalszej analizy.
+
+Następnie za pomocą Testu ilorazu wiarygodności określono który model jest lepiej dopasowany, czy model w wesji podstawowej czy z ograniczeniami:
+
+```{r}
+lrtest(m, model)
+```
+
+Na podstawie testu LR nie ma podstaw do odrzucenia hipotezy zerowej, zatem lepszy jest model z ograniczeniami.
+
+```{r}
+summary(m)
+```
+
+W dalszej kolejności usuwam zmienną Solar.R , gdyż jest nieistotna statystycznie i szacuje model bez zmiennej:
+
+```{r}
+model1<-lm(Temp~Month+Ozone, data=mydata)
+summary(model1)
+```
+
+Widać, że wszystkie zmienne w modelu są istotne. Zarówno zmienna Month i Ozone ma dodatni wpływ na temperaturę. Przy zmianie tych zmienneych o jednostę temperatura wzrośnie odpowiednio o 2 i 0.2 jednostki.
