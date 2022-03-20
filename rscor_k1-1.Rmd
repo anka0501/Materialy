@@ -1,0 +1,2097 @@
+---
+title: Praca zaliczeniowa na przedmiot Modelowanie ryzyka kredytowego oraz budowy
+  kart scoringowych w R
+author: "Katarzyna Chyrowicz, Szymon Lesiak"
+date: "10 luty 2018"
+output:
+  html_document: default
+---
+
+```{r setup,eval=T, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+br<-function(x) round(x,digits=3)
+bp<-function(x) kable(summary(x)$coefficient,format='html',digits=3)
+kh<-function(x) kable(x,format='html')
+km<-function(x) kable(x,format='markdown')
+
+```
+# Analiza danych
+
+```{r, warning=F, message=FALSE, include=FALSE}
+if (!require("DescTools")) install.packages("DescTools")
+library(DescTools)
+if (!require("moments")) install.packages("moments")
+library(moments)
+if (!require("dplyr")) install.packages("dplyr")
+library(dplyr)
+if (!require("vcd")) install.packages("vcd")
+library(vcd)
+if (!require("smbinning")) install.packages("smbinning")
+library(smbinning)
+if (!require("forcats")) install.packages("forcats")
+library(forcats)
+if (!require("pROC")) install.packages("pROC")
+library(pROC)
+if (!require("rockchalk")) install.packages("rockchalk")
+library(rockchalk)
+if (!require("pcaPP")) install.packages("pcaPP")
+library(pcaPP)
+if (!require("plyr")) install.packages("plyr")
+library(plyr)
+if (!require("caTools")) install.packages("caTools")
+library(caTools)
+if (!require("zoo")) install.packages("zoo")
+library(zoo)
+if (!require("lattice")) install.packages("lattice")
+library(lattice)
+if (!require("RColorBrewer")) install.packages("RColorBrewer")
+library(RColorBrewer)
+if (!require("devtools")) install.packages("devtools")
+library(devtools)
+if (!require("woe")) install.packages("woe")
+library(woe)
+if (!require("woeBinning")) install.packages("woeBinning")
+library(woeBinning)
+if (!require("ggplot2")) install.packages("ggplot2")
+library(ggplot2)
+if (!require("LogisticDx")) install.packages("LogisticDx")
+library(LogisticDx)
+if (!require("gtools")) install.packages("gtools")
+library(gtools)
+if (!require("lmtest")) install.packages("lmtest")
+library(lmtest)
+if (!require("leaps")) install.packages("leaps")
+library(leaps)
+if (!require("VSURF")) install.packages("VSURF")
+library(VSURF)
+if (!require("sqldf")) install.packages("sqldf")
+library(sqldf)
+if (!require("OptimalCutpoints")) install.packages("OptimalCutpoints")
+library(OptimalCutpoints)
+if (!require("caret")) install.packages("caret")
+library(caret)
+if (!require("rattle")) install.packages("rattle")
+library(rattle)
+if (!require("knitr")) install.packages("knitr")
+library(knitr)
+if (!require("xtable")) install.packages("xtable")
+library(xtable)
+
+
+```
+Baza danych, która została wykorzystana do analizy, dotyczy wyników kampanii marketingowej portugalskiego banku. Polegała ona na wykonywaniu telefonów do potencjalnych klientów i zachęcaniu do zakupu produktu, którym był depozyt bankowy. W 5289 przypadkach zakończyła się ona sukcesem, w 39922 przypadkach porażką. Niniejsza analiza ma na celu oszacowanie czynników wpływających na prawdopodobieństwo sukcesu.
+
+```{r, include = F}
+bf<-read.table("bank-full.csv",sep=";",header = TRUE)
+bf %>% select(-day,-month)->bf
+
+names(bf)
+colnames(bf)[17]<-"DEF"
+summary(bf$DEF)
+
+bf$DEF<-ifelse(bf$DEF=="no",0,1)
+
+```
+W bazie danych dostępnych jest 16 zmiennych objaśniających, których podstawowe statystyki opisowe widać poniżej.
+
+```{r cache = T, eval = T, echo = F }
+kable(summary(bf),format='markdown')
+
+```
+*Age* to zmienna określająca wiek klienta, *job* typ wykonywanej przez niego pracy, przyjmujący 12 poziomów, *marital* to stan cywilny klienta (3 poziomy), *education* poziom wykształcenia klienta (podstawowe, średnie, wyższe, nieznane). Zmienna *default* przyjmuje poziom *yes* dla klientów, którzy posiadają kredyt w defaulcie, *no* w przeciwnym przypadku, *balance* to saldo na koncie, *housing* określa, czy klient ma kredyt mieszkaniowy, *loan*, czy klient posiada pożyczkę osobistą. *Contact* oznacza kontakt komórkowy, telefoniczny lub nieznany z klientem, *year* to rok, w którym kampania została przeprowadzona (2008-2010), *week_day* określa dzień tygodnia, w którym została ona zaadresowana do klienta. *Duration* to czas ostatniej rozmowy z klientem, w celu przekonania do zakupu produktu. Jest on znany dopiero po kontakcie, kiedy znany jest już wynik kampanii, dlatego nie będzie można wykorzystać tej zmiennej bezpośrednio do modelowania. *Campaign* określa liczbę kontaktów z klientem w prowadzonej kampanii, *pdays* to liczba dni, które upłynęły od kontaktu z poprzedniej kampanii, *previous* to liczba kontaktów z klientem przed obecną kampanią, *poutcome* to wynik poprzedniej kampanii.
+
+```{r, include = F}
+a<-Desc(bf$balance)
+bf %>% filter(balance>60000)
+
+skewness(bf$balance)
+kurtosis(bf$balance)
+hist(bf$balance, breaks="Scott")
+```
+
+
+```{r, include=FALSE}
+# Struktura danych
+str(bf) 
+```
+
+
+```{r, include=FALSE}
+
+#PREVIUS
+#srednia rate, w zaleznosci od liczby kontaktow
+bf %>% group_by(previous) %>%  summarise(mean=mean(DEF))
+bf$previous2<-bf$previous
+#obciecie przy 5
+bf$previous2<-as.factor(ifelse(bf$previous>5,5,bf$previous))
+#sredni rate bardzo sie nie rozni wraz z wieksza liczba kontaktow
+bf %>% group_by(previous2) %>%  summarise(mean=mean(DEF))
+#znacznik czy byl wczesniejszy kontakt
+bf$if_previous<-as.factor(ifelse(bf$previous>0,1,0))
+```
+
+
+```{r, include=FALSE}
+round(prop.table(table(bf$if_previous,bf$DEF)),3)
+
+```
+
+
+```{r, include=FALSE}
+
+summary(bf$pdays)
+hist(bf$pdays)
+summary(bf[bf$pdays>=0,"pdays"])
+```
+
+
+```{r, include=FALSE}
+
+summary(bf$duration)
+hist(bf$duration)
+
+bf %>% group_by(previous2) %>%  summarise(mean=mean(duration))
+bf %>% group_by(DEF) %>%  summarise(mean=mean(duration))
+bf %>% filter(duration==0) %>% summarise(mean(DEF))
+bf %>% filter(duration>0) %>% summarise(mean(DEF))
+bf %>% filter(duration==0)
+
+#tylko 3 obserwacje gdzie czas polaczenia rowny 0-mozna je wywalic
+bf %>% filter(duration>0)->bf
+```
+
+BALANCE
+
+```{r, include=FALSE}
+
+summary(bf$balance)
+hist(bf$balance)
+hist(bf[bf$balance<50000,"balance"],breaks = "Scott")
+```
+
+
+```{r, include=FALSE}
+
+summary(bf$campaign)
+round(prop.table(table(bf$campaign)),3)
+bf$campaign2<-as.factor(ifelse(bf$campaign>=7,7,bf$campaign))
+round(prop.table(table(bf$campaign2)),3)
+prop.table(table(bf$campaign2,bf$DEF))
+```
+
+```{r, include=FALSE}
+
+summary(bf$week_day)
+round(prop.table(table(bf$week_day)),3)
+prop.table(table(bf$week_day,bf$DEF))
+bf$week_day<-as.factor(ifelse(bf$week_day %in% c(6,7),7,bf$week_day))
+bf$year<-as.factor(bf$year)
+```
+
+Poniżej zostały zaprezentowane pierwsze i ostatnie 10 wierszy, które mogą dać ogólny pogląd na bazę.
+```{r cache = T, eval = T, echo = F }
+kable(head(bf, n=10),format='html')
+
+```
+
+Kolejnym ważnym krokiem we wstępnej analizie danych jest sprawdzenie liczebności braków danych. Jak widać w tabeli ponieżej, problem ten nie występuje dla wybranej bazy.
+
+```{r cache = T, eval = T, echo = F }
+kable(colSums(is.na(bf)),format='html')
+```
+
+```{r, include=FALSE}
+tabelka<-table(bf$education,bf$DEF)
+
+addmargins(tabelka)
+
+prop.table(tabelka,1) 
+
+round(prop.table(tabelka,1), 2)
+```
+
+Następnie została przeprowadzona analiza zależności między zmienną określającą poziom wykształcenia klienta oraz sukcesem kampanii. Na podstawie testu Ch-kwadrat należy odrzucić hipotezę zerową, że sukces nie zależy od wykształcenia.
+
+```{r cache = T, eval = T, echo = F }
+
+#H0:wejscie w default nie zalezy od wyksztalcenia
+chisq.test(tabelka)
+```
+
+
+```{r, include=FALSE}
+
+assocstats(tabelka)
+
+table3 <- xtabs(~if_previous+education+DEF, data=bf)
+ftable(table3)
+```
+
+Poniżej wykresy udziału sukcesów w zależności od poziomu wykształcenia. Najczęściej produkt był kupowany przez klientów z wyższym wykształceniem.
+
+```{r cache = T, eval = T, echo = F }
+
+barplot(t(prop.table(tabelka,1)))
+
+```
+
+
+
+# Przygotowywanie zmiennych WoE{.tabset}
+
+## Fine classing
+Kolejnym krokiem analizy będzie przygotowanie zmiennych do fine-classingu. W tym celu zostaną one podzielone na zmienne ciągłe oraz dyskretne.
+
+```{r, include=FALSE}
+resetPar <- function() {
+  dev.new()
+  op <- par(no.readonly = TRUE)
+  op
+}
+
+#podzial zmiennych na zmienne numeryczne i zmienne typu factor
+colnames(bf)
+#Kasia
+#zostawiam jeszcze miesiac,rok i duration-pozniej sprobuje wykorzystac jako offset
+kolumny<-colnames(bf %>% select(-DEF))
+baza<-bf[,kolumny]
+
+nums <- sapply(baza, is.numeric) 
+baza.n<-baza[,nums]
+
+fact <- sapply(baza, is.factor)
+baza.f<-baza[,fact]
+```
+
+Wszystkie zmienne ciągłe zostały poddane dyskretyzacji na podstawie wyznaczonych percentyli.
+
+```{r, include=FALSE}
+
+
+percentile<-apply(X=baza.n, MARGIN=2, FUN=function(x) round(quantile(x, seq(0.1,1,0.1), na.rm=TRUE),2))
+
+# wyliczenie liczby unikalnych wartosci per kolumna 
+unique<-apply(baza.n, MARGIN=2, function(x) length(unique(x)))
+
+# wybranie tylko tych kolumn, dla ktorych liczba unikalnych wartosci jest wieksza lub rowna 10
+numeric<-colnames(baza.n[which(unique>=10)])
+
+# kategoryzacja zmiennych wg percentyli
+
+for (m in numeric){
+  baza.n[,paste(m,"_fine", sep="")]<-cut(
+    x=as.matrix(baza.n[m]), 
+    breaks=c(-Inf,unique(percentile[,m])), 
+    labels =c(paste("<=",unique(percentile[,m])))
+  ) 
+}
+
+baza.n$def_woe<-bf$DEF
+
+#Utworzenie listy do wypelnienia odpowiednimi danymi
+WOE<-list()
+
+#Utworzenie data frame na warto?ci Information Value
+IV<-data.frame(VAR=character(), IV=integer())
+
+#Wybranie zmiennych z konc?wk? _fine 
+baza.n_fine<-baza.n[ ,grepl(pattern="_fine" , x=names(baza.n))]
+
+smbinning.eda(baza.n, rounding = 3, pbar = 1)
+#podstawowe miary opisuj?ce zmienne
+
+# Wyb?r zmiennych do analizy
+names.n<-colnames(baza.n[,!names(baza.n) %in% c(colnames(baza.n_fine),"DEF","def","def_woe")])
+
+```
+
+Na poniższych wykresach widać rozkłady zmiennych dla sukcesu i porażki, rozkłady częstości, udział klietnów, którzy zdecydowali się na zakup w każdej grupie oraz wskaźnik WOE. Na jego podstawie można zauważyć, że prawdopodobnie można połączyć niektóre poziomy dla zmiennej *age*, jednak na razie zmienna ta zostanie w pierwotnej postaci.
+
+```{r cache = T, eval = T, echo = F }
+
+i<-names.n[1]
+for (i in names.n){
+  
+  # ustawienie liczby kolumn i wierszy przy laczeniu wykres?w
+  par(mfrow=c(2,2))
+  
+  results<- smbinning.custom(df=baza.n, y="def_woe", x=i, cuts=unique(percentile[,i]))
+  
+  
+  # BOXPLOT
+  #w rozbiciu na klientow w defaulcie i nie w defaulcie
+  boxplot(baza.n[,i]~baza.n$def, 
+          horizontal=T, frame=F, col="lightgray",main="Distribution") 
+  mtext(i,3) 
+  # Rozk?ad cz?sto?ci 
+  smbinning.plot(results,option="dist",sub=i)
+  # Udzia? z?ych klient?w
+  smbinning.plot(results,option="goodrate",sub=i) 
+  # WoE
+  smbinning.plot(results,option="WoE",sub=i)
+  
+  
+  
+  IV<-rbind(IV, as.data.frame(cbind("VAR"=i, "IV"=results$ivtable[results$ivtable$Cutpoint=="Total", "IV"])))
+  
+  d<-results$ivtable[,c("Cutpoint","WoE","PctRec")]
+  d<-d[d$Cutpoint!="Total",]
+
+    d<-d[with(d, order(d$WoE)),]
+  d$numer<-11:(nrow(d)+10)
+  
+  WOE[[i]]<-d
+  
+} 
+
+```
+
+Podobna analiza została wykonana dla zmiennych dyskretynych. Na podstawie wskaźnika WOE zostały połączone poziomy zmiennej *job*. Z *self-employed* i *unknown* powstał poziom *self-employed & unknown*, natomiast z *housmaid* i *services* *housmaid & services*.
+
+```{r, include = FALSE}
+
+smbinning.eda(baza.f, rounding = 3, pbar = 1)
+
+#wektor zmiennych do analizy
+names.f<-colnames(baza.f[,!names(baza.f) %in% c("def","def_woe","default")])
+
+baza.f$def_woe<-bf$DEF
+```
+
+```{r cache = T, eval = T, echo = F }
+
+for (i in names.f){
+  
+  baza.f[,paste(i,"_fine", sep="")]<-baza.f[,i]
+  
+  par(mfrow=c(1,3))
+  
+
+  results<- smbinning.factor(df=baza.f, y="def_woe", x=i, maxcat=length(unique(baza.f[,i])))
+
+  smbinning.plot(results,option="dist",sub=i) 
+  smbinning.plot(results,option="goodrate",sub=i) 
+  smbinning.plot(results,option="WoE",sub=i)
+  
+  IV<-rbind(IV, as.data.frame(cbind("VAR"=i, "IV"=results$ivtable[results$ivtable$Cutpoint=="Total", "IV"])))
+  
+  d<-results$ivtable[,c("Cutpoint","WoE","PctRec")]
+  
+  d<-d[d$Cutpoint!="Total",]
+  
+  d<-d[with(d, order(d$WoE)),]
+  
+  d$numer<-11:(nrow(d)+10)
+  
+  WOE[[i]]<-d
+  
+} 
+
+```
+
+
+```{r, include=FALSE}
+# polaczenie baz numeric i factor
+baza<-cbind(baza.f,baza.n)[,1:38]
+
+stats<-cbind(IV, Gini=NA, miss=NA)
+
+
+for (l in names(WOE)){
+  baza[,paste(l,"_fine", sep="")]<-fct_explicit_na(baza[,paste(l,"_fine", sep="")], na_level="Missing")
+  
+  zmienna<-baza[,c("def_woe", paste(l,"_fine", sep=""))]
+  woe<- WOE[[l]][c("Cutpoint", "WoE")]
+  
+  if (is.character(woe$Cutpoint)==TRUE) 
+  { 
+    woe$Cutpoint<-as.factor(gsub("= '|'", "", woe$Cutpoint))
+    woe$Cutpoint<-as.factor(woe$Cutpoint)
+  }
+
+  zbior_temp<-merge(zmienna, woe, by.x=paste(l,"_fine", sep=""), by.y="Cutpoint", all.x=T)
+  
+  colnames(zbior_temp)[which(names(zbior_temp) == "WoE")] <- paste(l, "_woe", sep="")  
+  
+  baza<-merge(baza, woe, by.x=paste(l,"_fine", sep=""), by.y="Cutpoint", all.x=T)
+  colnames(baza)[which(names(baza) == "WoE")] <- paste(l, "_woe", sep="")
+  
+  print(c(any(is.na(zbior_temp[,paste(l, "_woe", sep="")])), l))
+  
+
+  gini<- c(2*auc(zbior_temp$def_woe,zbior_temp[,paste(l, "_woe", sep="") ])-1)
+  
+  stats[stats$VAR==l, "Gini"]<-gini
+  
+  
+  miss<-1-c(nrow(zbior_temp[zbior_temp[,paste(l,"_fine", sep="")]!='Missing', ])/nrow(zbior_temp))
+  
+  stats[stats$VAR==l, "miss"]<-miss
+  
+  
+
+}
+
+stats_fine<-stats
+
+kopia_baza<-baza
+
+baza$job <- combineLevels(baza$job,levs = c( "self-employed", "unknown"), newLabel = c("self-employed & unknown") )
+baza$job <- combineLevels(baza$job,levs = c("housemaid", "services"), newLabel = c("housmaid & services") )
+```
+
+Następnie, dla bazy z przekształconymi zmiennymi, została przeprowadzona analiza korelacji statystyką Tau Kendalla. Macierz korelacji została uporządkowana zgodnie z wartościami Giniego w wierszach i kolumnach, zostały usunięte zmienne z Ginim poniżej 8% oraz skorelowane z pozostałymi zmiennymi. W wyniku tego w bazie pozostały zmienne *duration*, *year*, *poutcome*, *contact*, *housing*, *job*, *balance*, *age*, *campaign2*, *education*, *marital*.
+
+
+## Coarse claassing
+```{r, include=FALSE}
+
+zm_do_analizy<-colnames(baza)[grep("_woe", colnames(baza))]
+
+zm_do_analizy<-zm_do_analizy[-1]
+baza_kor<-baza[,zm_do_analizy]
+kopia_baza2<-baza
+
+
+kendall2 <-cor.fk (baza_kor)
+
+
+kor_list<-data.frame()
+
+stats$VARW<-paste(stats$VAR,"_woe",sep="")
+stat <- data.frame()
+stat<-merge(x = stats, y = kendall2, by.x = "VARW",by.y="row.names",all.y=T)
+
+stat<-stat[ order(-stat[,"Gini"]), ]
+
+row.names(stat)<-stat[,1]
+
+stat<-stat[6:length(stat[1,])]
+
+cols<-row.names(stat[,])
+
+stat<-stat[cols]
+
+temp_k<-stat
+temp_k<-replace(temp_k, is.na(temp_k), 0.000001000)
+
+threshold<-0.5
+
+repeat{
+  if (length(temp_k)<1) {
+    break
+  }
+  
+  wiersz_k<-abs(temp_k[1,]) > threshold
+  wiersz_k[1]<-TRUE
+  
+  if(length(wiersz_k)>1){
+    wiersz_k2<-wiersz_k[,wiersz_k]
+  }else{wiersz_k2<-wiersz_k}
+  temp_k<-as.data.frame(temp_k[!t(wiersz_k),!wiersz_k])
+  
+  if(length(temp_k)==1){ 
+    colnames(temp_k)<- dimnames(wiersz_k)[[2]][-which(wiersz_k)]
+    rownames(temp_k)<- dimnames(wiersz_k)[[2]][-which(wiersz_k)]
+  }
+  
+  
+  if(length(wiersz_k2)==1) {
+    zmienna<-row.names(wiersz_k)
+    nazwy<-as.data.frame(zmienna)
+  }
+  
+  if(length(wiersz_k2)>1) {
+    wiersz_k2<-wiersz_k2[2:length(wiersz_k2)]
+    wiersz_k2<-as.data.frame(t(wiersz_k2))
+    nazwy<-colnames(wiersz_k2)
+    nazwy<-as.data.frame(t(nazwy))
+    row.names(nazwy) <- row.names(wiersz_k)
+    zmienna<-row.names(wiersz_k)
+    zmienna<-as.data.frame(zmienna)
+    nazwy<-merge(zmienna,nazwy)
+  }
+  
+  
+  kor_list<-rbind.fill(kor_list,nazwy)
+
+    if(length(temp_k)==1){ 
+    zmienna<-dimnames(wiersz_k)[[2]][-which(wiersz_k)]
+    nazwy<-as.data.frame(zmienna)
+    kor_list<-rbind.fill(kor_list,nazwy)
+    break}
+  
+}
+
+all<-merge(x = stats, y = kor_list, by.x = "VARW",by.y="zmienna",all.y=T)
+all<-all[ order(-all[,"Gini"]), ]
+all<-all[all$Gini>0.08,]
+```
+
+```{r, include=FALSE}
+
+baza_coarse<-baza[-grep("_fine",colnames(baza))]
+baza_coarse$def<-baza_coarse$def_woe
+```
+
+Kolejnym krokiem analizy był podział próby na uczącą (treningową) oraz walidacyjną (testową). Próba treningową stanowi 70% obserwacji, testowa 30%, zostały one dobrane losowo.
+
+```{r, include=FALSE}
+
+d_split<-split(x=baza_coarse, f=baza_coarse$def_woe)
+#paste(baza_coarse$def,baza_coarse$def) je?eli dla wi?cej ni? jednego elemetu
+
+
+# tabele train i test
+train = list()
+test=list()
+
+
+for (i in 1:length(d_split)){
+  set.seed(1916);
+  
+ assign(
+    paste("sample",i,sep="_"),sample.split(d_split[[i]][,1], SplitRatio = .7))
+  
+  assign(
+    paste("train",i,sep="_"),subset(d_split[[i]],  get(paste("sample",i,sep="_")) == TRUE))
+  
+  assign(
+    paste("test",i,sep="_"),subset(d_split[[i]], get(paste("sample",i,sep="_")) == FALSE))
+  
+  train[[i]]<-get(paste("train",i,sep="_"))
+  test[[i]]<-get(paste("test",i,sep="_"))
+  }
+
+train = do.call(rbind, train)
+test = do.call(rbind, test)
+
+#rm( test_1, test_2
+ #   , train_1, train_2
+  #  , sample_1, sample_2)
+
+#train %>% group_by(job)%>% summarise(count=n())->a
+#a$pfreq<-a$count/nrow(train)
+#test %>% group_by(job)%>% summarise(count=n())->b
+#b$pfreq<-b$count/nrow(test)
+
+
+#resetPar <- function() {
+ # dev.new()
+#  op <- par(no.readonly = TRUE)
+#  dev.off()
+#  op
+#}
+
+
+#par(resetPar()) 
+#par(xpd = T, mfrow=c(1,1))
+
+```
+
+
+Następnie dla każdej z prób został przeprowadzony coarse-classing - dyskretyzacja zmiennych na podstawie drzewa decyzyjnego. Na kolejnych wykresach widać stabilność dla próby treningowej i testowej, rozkład częstości i udział dobrych klientów.
+
+
+```{r, include=FALSE}
+
+train_big<-train
+test_big<-test
+train<-train_big
+test<-test_big
+
+kolumny<-colnames(train_big)[-grep("_woe", colnames(train_big))]
+train<-train[,kolumny]
+train$def_woe<-train_big$def_woe
+
+test<-test[,kolumny]
+test$def_woe<-test_big$def_woe
+
+
+nums <- sapply(train[,kolumny], is.numeric) 
+kolumny.n<-kolumny[nums==T]
+
+temp<-data.frame(VAR=character(), VALUE=integer())
+stats<-data.frame(VAR=character(), IV=integer(),Gini=integer(), MISS=integer(),IVw=integer(),Giniw=integer(), MISSw=integer())
+#zbieranie punktow odciecia na potrzeby zbioru testowego
+cut_offs<-data.frame(VAR=character(), cuts=integer())
+
+zmienna_c<-kolumny.n[1]
+```
+
+```{r cache = T, eval = T, echo = F }
+for (zmienna_c in kolumny.n){
+  
+  
+  par(xpd = T, mar = par()$mar, mfrow=c(2,2))
+  
+  result<-smbinning(train[,c("def_woe", zmienna_c)], y="def_woe", x=zmienna_c, p=0.05)
+  
+  if(length(result)>1){
+    points<-list(result$cuts)
+    cut_offs<-rbind(cut_offs,as.data.frame(cbind("VAR"=zmienna_c,"cuts"=points)))
+    
+    IV<-result$ivtable
+    
+    
+    train[,paste(zmienna_c, "_coarse", sep="")]<- cut(train[,zmienna_c], breaks=c(-Inf,unique(result$cuts),Inf), 
+                                                      labels=c(paste("<=", unique(result$cuts)),"<= Inf"),
+                                                      include.lowest = T)
+    
+    train[,paste(zmienna_c, "_coarse", sep="")]<-fct_explicit_na(train[,paste(zmienna_c, "_coarse", sep="")], na_level="Missing")
+    
+    test[,paste(zmienna_c, "_coarse", sep="")]<- cut(test[,zmienna_c], breaks=c(-Inf,unique(result$cuts),Inf), 
+                                                     labels=c(paste("<=", unique(result$cuts)),"<= Inf"),
+                                                     include.lowest = T)
+    test[,paste(zmienna_c, "_coarse", sep="")]<-fct_explicit_na(test[,paste(zmienna_c, "_coarse", sep="")], na_level="Missing")
+    
+    
+    IVw<-sum(iv.mult(test,"def",vars=paste(zmienna_c,"_coarse",sep=""))[[1]][,"miv"])
+    IV$Cutpoint<-ifelse(grepl(">",IV$Cutpoint)==T,"<= Inf",IV$Cutpoint)
+    
+    train<-merge(train,IV[,c("Cutpoint", "WoE")],by.x= paste(zmienna_c, "_coarse", sep=""), by.y="Cutpoint", all.x=T, sort=F)
+    colnames(train)[which(names(train) == "WoE")] <- paste(zmienna_c, "_woe", sep="") 
+    
+    test<-merge(test,IV[,c("Cutpoint", "WoE")],by.x= paste(zmienna_c, "_coarse", sep=""), by.y="Cutpoint", all.x=T, sort=F)
+    colnames(test)[which(names(test) == "WoE")] <- paste(zmienna_c, "_woe", sep="")
+    
+    #GINI
+    gini<- 2*auc(train$def_woe,train[,paste(zmienna_c, "_woe", sep="") ])-1
+    giniw<- 2*auc(test$def_woe,test[,paste(zmienna_c, "_woe", sep="") ])-1
+    #policz % missing?w
+    miss<-1-nrow(train[!(is.na(train[,zmienna_c])),])/nrow(train)
+    missw<-1-nrow(test[!(is.na(test[,zmienna_c])),])/nrow(test)
+    stats<-rbind(stats, as.data.frame(cbind("VAR"=zmienna_c, "IV"=IV[IV$Cutpoint=="Total", "IV"],"Gini"=gini,  "MISS"=miss,"IVw"=IVw, "Giniw"=giniw,  "MISSw"=missw)))
+    
+    
+    wykres<-IV[!is.na(IV$WoE) & IV$Cutpoint!="Total",]
+    wykres$WoE<-ifelse(wykres$WoE==Inf, 8, ifelse(wykres$WoE==-Inf, -8,wykres$WoE))
+    g<-barplot(wykres$WoE,names.arg=wykres$Cutpoint, cex.names=0.5, main=zmienna_c, xaxt="n")
+    print(g)
+    axis(1,g,wykres$Cutpoint, tick=F, las=2, cex.axis=0.7)
+    text(g,wykres$WoE, labels=paste("WoE=",format(wykres$WoE,digits=1)," \n Fill=",round(wykres$PctRec,3)*100, "%", sep=""), xpd = T, col = "black", pos=3, cex=0.7)
+    
+    # Stabilnosc
+    
+    freq.test<-as.data.frame(table(test[,paste(zmienna_c, "_coarse", sep="")])/ nrow(test))
+    colnames(freq.test)<-c("Cutpoint", "PctRec")
+    freq.train<-wykres[,c("Cutpoint","PctRec")]
+    freq<-merge(freq.train,freq.test, all.x=T, by="Cutpoint")
+    colnames(freq)<- c("Cutpoint","Train","Test")
+    rownames(freq)<-freq[,1]
+    freq<-freq[,-1]
+    
+    
+    stacked<-barplot(as.matrix(freq), beside=F, main=zmienna_c)
+    print(stacked)
+    legend("topright", legend=row.names(freq), cex=0.6, bty="o",pch=21)
+    
+    # Rozk?ad cz?sto?ci 
+    smbinning.plot(result,option="dist",sub=zmienna_c)
+    # Udzia? z?ych klient?w
+    smbinning.plot(result,option="goodrate",sub=zmienna_c) 
+    
+    
+  }
+  #pokaz dla jakich zmiennych policzyl woe
+  temp<-rbind(temp, as.data.frame(cbind(VAR=zmienna_c,VALUE=length(result)>1 )))
+  names(temp)<-c("VAR","VALUE")
+  
+}
+```
+
+
+```{r, include=FALSE}
+
+
+factors <- sapply(train[,kolumny], is.factor) 
+kolumny.f<-kolumny[factors==T]
+kolumny.f<-kolumny.f[-4]
+
+
+
+resetPar <- function() {
+  dev.new()
+  op <- par(no.readonly = TRUE)
+  op
+}
+
+par(resetPar()) 
+
+```
+
+```{r cache = T, eval = T, echo = F }
+for (zmienna_c in kolumny.f){
+train[,zmienna_c]<-droplevels(train[,zmienna_c])  
+test[,zmienna_c]<-droplevels(test[,zmienna_c])
+
+  par(xpd = T, mfrow=c(2,2))
+  
+  result<-smbinning.factor(train[,c("def_woe", zmienna_c)], y="def_woe", x=zmienna_c)
+  
+  
+  if(length(result)>1){
+    points<-list(result$cuts)
+    cut_offs<-rbind(cut_offs,as.data.frame(cbind("VAR"=zmienna_c,"cuts"=points)))
+    
+    IV<-result$ivtable
+    
+    
+    #NA na Missing  
+    train[,zmienna_c]<-fct_explicit_na(train[,zmienna_c], na_level="Missing")
+    test[,zmienna_c]<-fct_explicit_na(test[,zmienna_c], na_level="Missing")
+    
+    
+    IVw<-sum(iv.mult(test,"def",vars=zmienna_c)[[1]][,"miv"])
+    IV$Cutpoint<-as.factor(gsub("= |'","",IV$Cutpoint))
+    
+    #doklejenie zmiennej z WoE i zmiana nazwy
+    train<-merge(train,IV[,c("Cutpoint", "WoE")],by.x=zmienna_c , by.y="Cutpoint", all.x=T, sort=F)
+    colnames(train)[which(names(train) == "WoE")] <- paste(zmienna_c, "_woe", sep="")
+    
+    test<-merge(test,IV[,c("Cutpoint", "WoE")],by.x= zmienna_c, by.y="Cutpoint", all.x=T, sort=F)
+    colnames(test)[which(names(test) == "WoE")] <- paste(zmienna_c, "_woe", sep="")
+    
+    #GINI
+    gini<- 2*auc(train$def_woe,train[,paste(zmienna_c, "_woe", sep="")])-1
+    giniw<- 2*auc(test$def_woe,test[,paste(zmienna_c, "_woe", sep="")])-1
+    #policz % missing?w
+    miss<-1-nrow(train[!(is.na(train[,zmienna_c])),])/nrow(train)
+    missw<-1-nrow(test[!(is.na(test[,zmienna_c])),])/nrow(test)
+    stats<-rbind(stats, as.data.frame(cbind("VAR"=zmienna_c, "IV"=IV[IV$Cutpoint=="Total", "IV"],"Gini"=gini,  "MISS"=miss,"IVw"=IVw, "Giniw"=giniw,  "MISSw"=missw)))
+    
+    #wykres WoE
+    wykres<-IV[!is.na(IV$WoE) & IV$Cutpoint!="Total",]
+    wykres$WoE<-ifelse(wykres$WoE==Inf, 8, ifelse(wykres$WoE==-Inf, -8,wykres$WoE))
+    g<-barplot(wykres$WoE,names.arg=wykres$Cutpoint, cex.names=0.5, main=zmienna_c, xaxt="n")
+    print(g)
+    axis(1,g,wykres$Cutpoint, tick=F, las=2, cex.axis=0.7)
+    text(g,wykres$WoE, labels=paste("WoE=",format(wykres$WoE,digits=1)," \n Fill=",round(wykres$PctRec,3)*100, "%", sep=""), xpd = T, col = "black", pos=3, cex=0.7)
+    
+    # Stabilnosc
+    
+    freq.test<-as.data.frame(table(test[,zmienna_c])/ nrow(test))
+    colnames(freq.test)<-c("Cutpoint", "PctRec")
+    freq.train<-wykres[,c("Cutpoint","PctRec")]
+    freq<-merge(freq.train,freq.test, all.x=T, by="Cutpoint")
+    colnames(freq)<- c("Cutpoint","Train","Test")
+    rownames(freq)<-freq[,1]
+    freq<-freq[,-1]
+    
+    stacked<-barplot(as.matrix(freq), beside=F, main=zmienna_c)
+    print(stacked)
+    
+    
+    # Rozk?ad cz?sto?ci 
+    smbinning.plot(result,option="dist",sub=zmienna_c)
+    # Udzia? z?ych klient?w
+    smbinning.plot(result,option="goodrate",sub=zmienna_c) 
+    
+    
+  }
+  #pokaz dla jakich zmiennych policzyl woe
+  temp<-rbind(temp, as.data.frame(cbind(VAR=zmienna_c,VALUE=length(result)>1 )))
+  names(temp)<-c("VAR","VALUE")
+  
+}
+
+```
+
+```{r, include=FALSE}
+stats_coars<-stats
+
+
+#kolsy<-colnames(train)[grep("woe", colnames(train))]
+kolsy<-c(all$VARW,"loan_woe","week_day_woe")
+
+```
+
+
+```{r, include=FALSE}
+
+hosmerlem = function(y, yhat, g=20) {
+  cutyhat = cut(yhat,breaks = quantile(yhat, probs=seq(0,1, 1/g)), include.lowest=TRUE)  
+  obs = xtabs(cbind(1 - y, y) ~ cutyhat)  
+  expect = xtabs(cbind(1 - yhat, yhat) ~ cutyhat)  
+  chisq = sum((obs - expect)^2/expect)  
+  P = 1 - pchisq(chisq, g - 2)  
+  return(list(chisq=chisq,p.value=P))
+  hr=P
+}
+
+cal_psi <- function(data1,data2, bench, target, bin)
+{
+  ben<-sort(data1[,bench]);
+  tar<-sort(data2[,target]);
+  # get and sort benchmark and target variable
+  ttl_bench<-length(ben);
+  ttl_target<-length(tar);
+  # get total num obs for benchmark and target
+  n<-ttl_bench%/%bin; #Num of obs per bin
+  psi_bin<-rep(0,times=bin) #initialize PSI=0 for each bin
+  
+  for (i in 1:bin) # calculate PSI for ith bin
+  {
+    
+    lower_cut<-ben[(i-1)*n+1];
+    if(i!=bin){upper_cut<-ben[(i-1)*n+n]; pct_ben<-n/ttl_bench;} else
+    {upper_cut<-ben[ttl_bench];
+    pct_ben<(ttl_bench-n*(bin-1))/ttl_bench;}
+    #last bin should have all remaining obs
+    
+    pct_tar<-length(tar[tar>lower_cut&tar<=upper_cut])/ttl_target;
+    psi_bin[i]<-(pct_tar-pct_ben)*log(pct_tar/pct_ben);
+  }
+  psi<-sum(psi_bin);
+  return(psi);
+}
+
+
+cal_psi_zm <- function(data1,data2, bench, target)
+{
+  ben<-sort(data1[,bench]);
+  tar<-sort(data2[,target]);
+  bin<-length(unique(ben))
+  bin_tar<-length(unique(tar))
+  # get and sort benchmark and target variable
+  ttl_bench<-length(ben);
+  ttl_target<-length(tar);
+  # get total num obs for benchmark and target
+  tab_ben<-table(ben)
+  pct_ben<-tab_ben/ttl_bench
+  names<-names(tab_ben)
+  tab_tar<-table(tar)
+  
+  if (ttl_target!=ttl_bench) {
+    tab_tar<-smartbind(tab_ben,tab_tar)
+    tab_tar<-tab_tar[2,]
+    tab_tar[,is.na(tab_tar)]<-0
+  }
+  pct_tar<-tab_tar/ttl_target
+  psi_bin<-rep(0,times=bin) #initialize PSI=0 for each bin
+  
+  psi_bin<-(pct_tar-pct_ben)*log(pct_tar/pct_ben);
+  psi<-sum(psi_bin);
+  return(psi);
+}
+
+
+
+```
+
+Dla tak przygotowanej bazy, na próbie treningowej, zostały oszacowane modele metodą logit. Wynikiem pierwszej estymacji jest model tylko ze stałą, kolejnej model z uwzględnieniem wszystkich zmiennych, nastęnie model dla zmiennych ze wskaźnikiem Gini powyżej 0.1 oraz model ze zmienną *duration* jako offset.
+
+
+# Budowa modelu
+
+
+## Model podstawowy
+```{r, include=FALSE}
+
+#kolsy<-kolsy[-grep("duration_woe", kolsy)]
+kolsy[9]<-"campaign_woe"
+kolsy[1]<-"duration"
+data<-train[,c("def",kolsy)]
+korelacja<-cor.fk(data)
+
+# estymacja modelu tylko ze sta?? - do por?wna?
+baza<-glm(def ~ 1,data=data, family=binomial("logit"))
+
+
+mean(train$def)
+mean(test$def)
+summary(train)
+table(train$if_previous_woe)
+kolsy
+max<-glm(def ~ .-duration,data=data, family=binomial("logit"))
+
+#tylko z gini wiekszym 0.1i offsetem
+model_offset<-glm(def ~ year_woe 
+                  +poutcome_woe
+                  +contact_woe
+                  +housing_woe
+                  +job_woe
+                  +balance_woe
+                  +age_woe      
+                  +campaign_woe
+                  +education_woe
+                  +marital_woe
+                  +offset(log(duration)),data=data, family=binomial("logit"))
+summary(model_offset)
+model_goly<-glm(def ~ year_woe 
+                  +poutcome_woe
+                  +contact_woe
+                  +housing_woe
+                  +job_woe
+                  +balance_woe
+                  +age_woe      
+                  +campaign_woe
+                  +education_woe
+                  +marital_woe
+                  ,data=data, family=binomial("logit"))
+summary(model_goly)
+
+data$model_goly<-predict(model_goly, type="response") 
+train$model_goly<-predict(model_goly,newdata=train, type="response") 
+test$model_goly<-predict(model_goly, newdata=test, type="response") 
+gini_tgoly<-2*auc(data$def,data$model_goly,direction="<")-1
+gini_wgoly<-2*auc(test$def,test$model_goly,direction="<")-1
+
+```
+
+Do budowy modelu wybrano zmienne, których wspołczynniki Gini przekracza 0.1. Wykorzystując te zmienne oszacowano model, w którym wszytskie zmienne były istotne statystycznie. Pominieto zmienną *duration*, która *apriori* nie jest znana przed zakończeniem połączenia.
+Podsumowanie modelu jest następujące:
+
+
+```{r cache = T, eval = T, echo = F }
+bp(model_goly)
+```
+
+Jednak jako ciekawostkę, mogącą stanowić element motywacyjny dla telefonicznych sprzedawców, przygotowano również model uwzględniający czas trwania połączenia (*duration*), jednak jako zmienną typu *offset*. Takie podejście umożliwiałoby ciągłą w czasie aktualizację wartości szacowanego prawdopodbieństwa sukcesu, które średnio wzrasta wraz z wydłużaniem się rozmowy.
+
+Podsumowanie modelu jest następujące:
+
+
+```{r cache = T, eval = T, echo = F }
+bp(model_offset)
+
+```
+
+
+## Wykorzystanie xgboost i drzewa decyzyjnego do szukania interakcji 
+
+
+```{r, include=FALSE}
+
+xgkolumn1<-colnames(train)
+xgkolumn1<-xgkolumn1[-grep("_woe", xgkolumn1)]
+xgkolumn1<-xgkolumn1[-grep("_coarse", xgkolumn1)]
+xgkolumn1<-xgkolumn1[1:20]
+xg_train<-train[,xgkolumn1]
+xg_test<-test[,xgkolumn1]
+xg_test$y<-ifelse(xg_test$def==1,"yes","no")
+xg_train$y<-ifelse(xg_train$def==1,"yes","no")
+load("xgb.fitrocbig.rdata")
+load("xgb.fitrocnotsobig.rdata")
+load("xgb.fitrocfinal.rdata")
+
+
+```
+
+Dla zadanego problemu zastosowano również algorytm xgboost, który jest modelem konkurencyjnym w stosunku do logitowego, a jednocześnie posłuży do szukania interkacji, którymi wzbogacony zostanie podstawowy model zapreznetowany wcześniej. Parametry optymalizowano przy zastosowaniu kroswalidacji w dwóch niezależnych sekwencjach. W pierwszym przetwarzaniu optymalizowano głębokość drzewa *(max_depth)*, liczbę powtórzeń *(nrounds)*, parametr regularyzacji *(gamma)*  oraz *learnng rate (eta)*. Dla optymalnych wartości parametrów zoptymalizowano % kolum *(colsample_bytree)*, na podstawie których budowane są kolejne drzewa,% obserwacji drzewa do powstania kolejnego węzła *(min_child_weight)*, % obserwacji zbioru treningowego stosowany do budowy drzew *(subsample)*. 
+
+```{r cache = T, eval = T, echo = F ,fig.height=10}
+plot(xgb.fitrocbig)
+xgb.fitrocbig$bestTune
+plot(xgb.fitrocnotsobig)
+xgb.fitrocnotsobig$bestTune
+```
+Wybrano optymalne wartości:
+*nrounds*: 140
+*max_depth*: 13
+*gamma*: 6
+*eta*: 0.0 (dla 0.03 występowała zbyt duża rozbieżność w dopasowaniu na próbie treningowej i testowej)
+*colsample_bytree*: 0.8
+*min_child_weight*: 0.3
+*subsample*: 0.9
+
+
+```{r cache = T, eval = T, echo = F,include=F }
+
+xg_train$xg<-predict(xgb.fitrocfinal,newdata=xg_train)
+xg_test$xg<-predict(xgb.fitrocfinal,newdata=xg_test)
+
+xg_train$pxg<-predict(xgb.fitrocfinal,type="prob",newdata=xg_train)
+xg_test$pxg<-predict(xgb.fitrocfinal,newdata=xg_test,type="prob")
+
+ginitrain_xg<- c(2*auc(xg_train$def,xg_train$pxg$yes,direction="<" )-1)
+ginitest_xg<- c(2*auc(xg_test$def,xg_test$pxg$yes,direction="<" )-1)
+```
+
+Współczynnik Gini na xgboost na zbiorze trenignowym wynosi `r toString(ginitrain_xg)`, z kolei na testowym `r toString(ginitest_xg)`. Wartości współczynnika dla wybranego modelu logit wynoszą odpowiednio `r toString(gini_tgoly)` oraz `r toString(gini_wgoly)`. Postanowiono przetestować hipotezę o równym rozkładzie predykcji z modelu logit i xgboost.
+
+```{r cache = T, eval = T, echo = F,include=F }
+
+roc_test_goly<-roc.test(data$def, xg_train$pxg$yes, data$model_goly,method="d")$p.value
+round(roc_test_goly,4)
+```
+
+Należy odrzucić hipotezę o równym rozkładzie. Algorytm xgboost generuje predkycje lepszej jakości.
+W związku z tym postanowiono wykorzystać informację zawartą w predykcjach xgboost do szukania interakcji, które następnie zostaną wykorzystane w modelu logit.
+W tym celu na poprawnie oszacowanych wartościach dopasowanych z algorytmu zbudowano jedno drzewo, które stanowi przybliżenie prawidłowo wyjaśnionych zależności przez xgboost.
+
+```{r}
+#zbiorki do drzewa
+xg_train %>% select(-pxg,-y) %>%  filter((xg=="yes" & def==1)|(xg=="no" & def==0))->ok
+xg_train %>% select(-pxg,-y) %>%  filter(xg=="no")->nie_ok
+
+set.seed(131)
+treeGrid <- expand.grid(maxdepth = 1:15) 
+treeControlm <- trainControl(method = "repeatedcv",
+                             number =5, #fold cross-validacji
+                             repeats =5, #liczba powtorzen cv
+                             ## Estimate class probabilities
+                             classProbs = TRUE,
+                             #verboseIter = TRUE,
+                             ## Evaluate performance using
+                             ## the following function
+                             summaryFunction = twoClassSummary,
+                             selectionFunction = "best"
+)
+tree.fitm <- train(xg~.-duration-def,
+                   data = ok,
+                   method = "rpart2",
+                   trControl = treeControlm,
+                   #verbose = FALSE,
+                   tuneGrid = treeGrid,
+                   ## Specify which metric to optimize
+                   metric = "ROC")
+
+#str(tree.fitm)
+```
+
+AUC określające jakość dopasowania drzewa do predyckji z xgboost:
+
+```{r cache = T, eval = T, echo = F }
+
+auc(ok$xg,as.numeric(predict(tree.fitm)))
+```
+
+Zwizualizowanie drzewa będzie pomocne przy szukaniu interakcji:
+
+```{r cache = T, eval = T, echo = F }
+
+fancyRpartPlot(tree.fitm$finalModel)
+```
+
+
+Z analizy drzewa wybrano interakcje między:
+1.year_woe a indykatorem wskazującym na to, czy z klientem wcześniej konatktowano się
+2.housing_woe a indykatorem, czy poprzedni kontakt z klientem obył się w ostatnich 90 dnach(uproszczono zależnośc wynikającą z drzewa).
+Pozotałe interakcje, które wskazywane są przez drzewa były nieistotne lub pogarszały jakość predykcji.
+
+
+#Diagnostyka modeli
+Na podstawie przeprowadzonej analizy otrzymano model postaci:
+
+```{r,eval=TRUE, include=FALSE}
+
+data$if_previous<-train$if_previous
+data$pdays2<-ifelse(train$pdays<90,"<90",">=90")
+test$pdays2<-ifelse(test$pdays<90,"<90",">=90")
+train$pdays2<-ifelse(train$pdays<90,"<90",">=90")
+train$if_success<-as.factor(ifelse(train$poutcome=="success",1,0))
+test$if_success<-as.factor(ifelse(test$poutcome=="success",1,0))
+data$if_success<-train$if_success
+model<-glm(def ~ year_woe:if_success
+           +poutcome_woe
+           +contact_woe:if_previous
+           +housing_woe:pdays2
+           +job_woe
+           +balance_woe
+           +age_woe      
+           +campaign_woe
+           +education_woe
+           +marital_woe
+           ,data=data, family=binomial("logit"))
+model_offset<-glm(def ~ year_woe:if_success
+           +poutcome_woe
+           +contact_woe:if_previous
+           +housing_woe:pdays2
+           +job_woe
+           +balance_woe
+           +age_woe      
+           +campaign_woe
+           +education_woe
+           +marital_woe
+           +offset(log(duration))
+           ,data=data, family=binomial("logit"))
+
+```
+```{r cache = T, eval = T, echo = F }
+bp(model)
+```
+
+Dla modelu z offsetem zastosowano ten sam zestaw interakcji:
+
+```{r cache = T, eval = T, echo = F }
+bp(model_offset)
+```
+
+```{r,eval=TRUE, include=FALSE,echo=FALSE}
+
+data$model<-predict(model, type="response") 
+train$model<-predict(model,newdata=train, type="response") 
+test$model<-predict(model, newdata=test, type="response") 
+gini_t<-2*auc(data$def,data$model,direction="<")-1
+gini_tgoly
+gini_w<-2*auc(test$def,test$model,direction="<")-1
+gini_wgoly
+
+roc_test_goly<-roc.test(data$def, data$model, data$model_goly,method="d")$p.value
+roc_test_goly
+```
+
+Dla otrzymango modelu wspłczynniki Gini na próbie treningowej i testowej wynoszą odpowiednio:
+`r toString(br(gini_t))`
+`r toString(br(gini_w))`
+Podczas gdy dla modelu bez interakcji:
+`r toString(br(gini_tgoly))`
+`r toString(br(gini_wgoly))`
+
+Przeprowadzono również test na równość rozkładów krzywych ROC. P-value testu wynosi `r toString(br(roc_test_goly))`, co wskazuje, że należy odrzucić hipotezę zerową o równych rozkładach krzywych.
+Podsumowując, dodanie interakcji poprawiło jakość predkcji. Dalsza analiza będzie dotyczyć otrzymanego modelu.
+
+Dla wybranych modeli przeprowadzono testy diagnostyczne
+
+```{r, eval=TRUE,include=FALSE}
+
+#test na jako?? dopasowania modelu - zupelnie podstawowy
+# za?ozenie por?wnujemy uzyskany model z modele "idealnym" i sprawdzamy, czy uzyskana wartosc max wirogodno?ci jest statystycznie bliska 0
+# H0: model jest dobrze dopasowany do danych
+gf<-pchisq(model$deviance, model$df.residual,lower.tail = F)
+gf_off<-pchisq(model_offset$deviance, model$df.residual,lower.tail = F)
+
+# wniosek?
+#model szczegolowy jest tak samo ok jak model ogolny
+
+# test LR na istotono?? zmiennych
+# sprawdzamy czy maxW dla modelu jest istotnie wi?ksze ni? dla modelu tylko ze sta?a - test na laczna istotnosc modelu
+# H0  zmienne s? ?acznie nieistotne
+ist<-pchisq(model$null.deviance-model$deviance, model$df.null-model$df.residual,lower.tail = F)
+ist_off<-pchisq(model_offset$null.deviance-model$deviance, model$df.null-model$df.residual,lower.tail = F)
+
+#odrzucic H0 o nieistotnosci zmiennych pominietych w modelu
+# test Hosmera - Lemeshowa - podstawowy test na jakosc dopasowania w modelach dla binarnej zmiennej zaleznej
+# H0: model jest dobrze dopasowany do danych
+# ma wiele wad - przede wszystkim jest bardzo wra?liwy na liczbe przedzia??w
+
+hr<-hosmerlem(y=data$def, yhat=fitted(model),g=12)
+hr_off<-hosmerlem(y=data$def, yhat=fitted(model_offset),g=12)
+
+#model nie ma poprawnej formy funkcyjnej, nie jest dobrze dopasowany do danych
+hosmerlem(y=data$def, yhat=fitted(model),g=7)
+hosmerlem(y=data$def, yhat=fitted(model),g=8)
+hosmerlem(y=data$def, yhat=fitted(model),g=9)
+hosmerlem(y=data$def, yhat=fitted(model),g=6)
+hosmerlem(y=data$def, yhat=fitted(model),g=5)
+hosmerlem(y=data$def, yhat=fitted(model),g=20)
+
+
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=7)
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=8)
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=9)
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=6)
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=5)
+hosmerlem(y=data$def, yhat=fitted(model_offset),g=20)
+
+
+#Inne testy dopasowania
+# generalnie powinny by? interpretowane ?aczeni, ka?dy z nich analizuje nieco inn? specyfik? dopasowania
+# je?eli jeden to OR
+
+gof<-gof(model ,g=12)
+gof_off<-gof(model_offset ,g=12)
+
+#drugie testy dotycza poprawnosci jakosci dopasowania
+
+data$baza<-baza$fitted.values
+data$model<-model$fitted.values
+data$model_offset<-model_offset$fitted.values
+data$max<-max$fitted.values
+```
+
+
+
+```{r,eval=TRUE, include=FALSE}
+
+# przeskalowanie wartosci dopasowana na wybrana skale
+# 660 punkt?w oznacza ODDS = 72 a ODDS si? dubuluje co 40 punkt?w
+
+data$score<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*model$linear.predictors
+
+# Przypisanie PD i SCORE do zbioru testowego i treningowego ca?ego
+test$model<-predict(model, newdata=test, type="response") 
+test$score<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*predict(model, newdata=test, type="link") 
+
+train$model<-predict(model, newdata=train, type="response") 
+train$score<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*predict(model, newdata=train, type="link") 
+
+
+#teraz dla offset
+data$score_off<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*model_offset$linear.predictors
+
+# Przypisanie PD i SCORE do zbioru testowego i treningowego ca?ego
+test$model_off<-predict(model_offset, newdata=test, type="response") 
+test$score_off<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*predict(model_offset, newdata=test, type="link") 
+
+train$model_off<-predict(model_offset, newdata=train, type="response") 
+train$score_off<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*predict(model_offset, newdata=train, type="link") 
+
+
+```
+
+```{r, eval=TRUE,include=FALSE}
+
+#test roc - sprawdza czy krzywa ROC jest istotnie lepsza dla dw?ch modeli
+#H0 krzywe ROC s? r?wnie dobre
+roc_test_baza<-roc.test(data$def, data$model, data$baza,method="d")$p.value
+
+#czy model daje takie same prognozy jak model bazowy (ze stala)
+roc_test_og<-roc.test(data$def, data$model, data$max,method="d")$p.value
+roc_test_off<-roc.test(data$def, data$model, data$model_off,method="d")$p.value
+
+#czy model jest taki sam jak model ogolny
+# wniosek?
+#wszystkie modele sa rozne
+summary(model)
+data$def_f<-as.factor(data$def)
+```
+
+Dla modeli ze zmiennymi wybranymi na podstawie Giniego została przeprowadzona analiza jakości dopasowania. Porównano model z maksymalną liczbą zmiennych z wybranym modelem, jego hipoteza zerowa mówi, że model jest dobrze dopasowany do danych. Dla modeli bez offsetu i z offsetem p-value przyjmuje wartość 1, co oznacza, że modele są tak samo dobre jak model ogólny. Kolejny test to test LR na istotność zmiennych, w którym sprawdza się, czy maksimum funkcji wiarygodności dla wybranego modelu jest większe niż dla modelu tylko ze stałą. W przypadku estymowanych modelu odrzucamy hipotezę, że zmienne są łącznie nieistotne. Podstawowym testem na jakość dopasowania w modelach dla binarnej zmiennej zależnej jest test Hosmera - Lemeshowa. Jego hipoteza zerowa mówi, że model jest dobrze dopasowany do danych, ma on jednak wiele wad, przede wszystkim jest bardzo wrażliwy na liczbę przedziałów. Niestety, w przypadku wybranych modeli należy odrzucić hipotezę zerową, że model ma poprawną formę funkcyjną, może to jednak wynikać z licznych wad testu. 
+
+
+| nazwa testu             |     model     |  model_offset  |
+| -------------           | ------------- | ----------      |
+| Chi2                    | `r toString(br(gf))`      |`r toString(br(gf_off))`    |
+| LR                      | `r toString(br(ist))`         |`r toString(br(ist_off))`       |
+| Hosmer-Lemeshow         | `r toString(br(hr$p.value))`|`r toString(br(hr_off$p.value))`  |
+| roc(model vs baza)      | `r toString(br(roc_test_baza))`          |             |
+| roc(model vs max)       | `r toString(br(roc_test_og))`              |             |
+| roc(offset vs model)    |               |     `r toString(br(roc_test_off))`        |
+
+
+Pozostałe testy diagnostyczne dla modelu *model*:
+
+```{r cache = T, eval = T, echo = F }
+gof
+
+
+```
+
+Niestety przedstawione testy wskazują na niepoprawną formę funkcyjną, jednak test Skutela dla dodatkowego wektora *z1* nie daje podstaw do odrzuceia hipotezy o poprawnym dopasowaniu do danych.
+
+Pozostałe testy diagnostyczne dla modelu *model_offset*:
+
+```{r cache = T, eval = T, echo = F }
+gof_off
+
+
+```
+
+Wyniki testów otrzymano jedynie dla testu Skutela z wetorem *z1*. Na jego podstawie nie ma podsatw do odrzucenia hipoetzy zerowej o poprawnym dopasowaniu modelu do danych.
+
+```{r, include=FALSE}
+
+# wsp??czynnik gini 
+# im wy?szy tym rozk?ady scor?w u z?ych i dobrych klient?w si? od siebie r??ni?
+gini_t<-2*auc(data$def,data$model,direction="<")-1
+gini_w<-2*auc(test$def,test$model,direction="<")-1
+gini_tmax<-2*auc(data$def,data$max,direction="<")-1
+
+gini_toff<-2*auc(data$def,data$model_off,direction="<")-1
+gini_woff<-2*auc(test$def,test$model_off,direction="<")-1
+
+#parametr direction-czy wraz ze wzrostem/spadkiem zmiennej niezleznej rosnie prawdopodbnienstwo defaultu
+#czyli czy wraz ze wzrostem estymacji prawdopodbienwta bedzie rosl udzial porazek
+#robi przy okazji tst na to czy model nie jest tak przekoszony ze odwraca predykcje
+# a model max?
+#2*auc(data$def,data$model_offset,direction="<")-1
+#2*auc(data$def,data$model,direction="<")-1
+
+# policzenie przedzia??w ufno?ci dla gini_t
+# method "delong" - analiztyczna postac; "bootstrap" szacowanie za pomc? bootstrap
+ci_delong_t<-2*ci.auc(data$def, data$model,method="d",direction="<")-1
+# 0.5474332 0.5647681 0.5821031
+ci_delong_w<-2*ci.auc(test$def, test$model,method="d",direction="<")-1
+# 0.5036979 0.5318512 0.5600044
+
+# method "delong" - analiztyczna postac; "bootstrap" szacowanie za pomc? bootstrap
+ci_delong_toff<-2*ci.auc(data$def, data$model_off,method="d",direction="<")-1
+# 0.8062601 0.8146858 0.8231114
+ci_delong_woff<-2*ci.auc(test$def, test$model_off,method="d",direction="<")-1
+# 0.7897315 0.8032276 0.8167237
+```
+
+Następnie zostały wyznaczone wartości Giniego dla modelu z maksymalną liczbą zmiennych, bez offsetu i z offsetem na próbie treningowej i testowej. Widać wyraźną poprawę po oszacowaniu modelu z użyciem zmiennej duration jako offset. Gini dla wybranych zmiennych jest również wyższy od modelu ogólnego.
+
+
+```{r cache = T, eval = T, echo = F, include=FALSE }
+gini_tmax
+
+
+gini_t
+gini_w
+
+gini_toff
+gini_woff
+
+
+# nie wiem, czy resztę pokazywać, bo nie wiem jak opisać !!!!!!!!!
+#2*auc(data$def,data$model_offset,direction="<")-1
+#2*auc(data$def,data$model,direction="<")-1
+
+ci_delong_t
+ci_delong_w
+
+ci_delong_toff
+ci_delong_woff
+
+```
+
+```{r, eval=TRUE,include=FALSE}
+#statystyka K-S
+# statystyka testu Kolmogorova - Smirnova na podobie?stwo dw?ch rozk?ad?w
+# por?wnywany s? rozk??dy scor?w u dobrych i u z?ych klient?w,
+# im bardziej si? od siebie r??ni? tym lepiej
+ks_score_t<-ks.test(data[data$def==0,c("score")],data[data$def==1,c("score")])$statistic
+ks_score_w<-ks.test(test[test$def==0,c("score")],test[test$def==1,c("score")])$statistic
+
+ks_score_toff<-ks.test(data[data$def==0,c("score_off")],data[data$def==1,c("score_off")])$statistic
+ks_score_woff<-ks.test(test[test$def==0,c("score_off")],test[test$def==1,c("score_off")])$statistic
+
+# test Kolmogorowa Sminrnova na podobienstwo dw?ch rozkladow 
+# por?wnywane s? rozk?ady scora w pr?bie trenuj?cej i testuj?cej
+# H0 dwa analizowane rozk?ady s? statystycznie nierozr??nialne
+
+ks<-ks.test(data$score,test$score)$p.value
+ks_off<-ks.test(data$score_off,test$score_off)$p.value
+
+```
+
+Statystyka Kolmogorova - Smirnova testuje podobieństwo dwóch rozkładów. W przypadku przeprowadzonej analizy porównywane są rozkłady scorów klientów, którzy kupili produkt i nie kupili. Wyższa wartość statystyki świadczy o większy różnicach w rozkładach, dlatego chcemy, żeby była jak największa. Poniżej kolejno testy dla modelu bez offsetu i z offsetem dla próby treningowej i testowej. Ostatnie dwie wartości to p-value dla modelu bez offsetu i z offsetem, na ich podstawie nie ma podstaw do odrzucenia hipotezy zerowej, że rozkłady są statystycznie nierozróżnialne.
+
+```{r cache = T, eval = T, echo = F, include=FALSE }
+ks_score_t
+ks_score_w
+
+ks_score_toff
+ks_score_woff
+
+ks
+ks_off
+```
+
+Test PSI sprawdza, na ile dwa rozkłady się od siebie różnią. Chcemy, aby jego wartości były jak najmniejsze, znowu widać poprawę w modelu z offsetem.
+
+```{r, include=FALSE}
+
+#PSI - sprawdza na ile dwa rozk?ady r??ni? si? od siebie - to jest IV tylko tym razem chcemy by by?o ma?e
+psi<-cal_psi(data1=data, data2=test, bench="score",target="score",bin=20)
+psi_off<-cal_psi(data1=data, data2=test, bench="score_off",target="score_off",bin=20)
+
+#jesli psi<0.25 to jest ok
+```
+
+```{r cache = T, eval = T, echo = F, include=FALSE }
+psi
+psi_off
+```
+
+
+```{r,eval=TRUE, include=FALSE}
+
+
+#najczestsze scory - je?eli powtarza si? cz?sto jeden score, to ma?e zmiany generuj? ryzyko zmiany oceny jako?ci modelu
+t<-as.data.frame(sort(table(data$score)/length(data$score),decreasing=T))[1:3,1:2]
+w<-as.data.frame(sort(table(test$score)/length(test$score),decreasing=T))[1:3,1:2]
+
+t_off<-as.data.frame(sort(table(data$score_off)/length(data$score_off),decreasing=T))[1:3,1:2]
+w_off<-as.data.frame(sort(table(test$score_off)/length(test$score_off),decreasing=T))[1:3,1:2]
+
+
+```
+
+| statystyka             |     model     |  model_offset  |
+| -------------           | ------------- | ----------      |
+| Gini train                | `r toString(br(gini_t))`    |`r toString(br(gini_toff))`    |
+| Gini test                 | `r toString(br(gini_w))`     |`r toString(br(gini_woff))`    |
+| KS train              | `r toString(br(ks_score_t))`  |`r toString(br(ks_score_toff))`   |
+| KS test             | `r toString(br(ks_score_w))`       |`r toString(br(ks_score_woff))`|
+| PSI                     | `r toString(br(psi))`          |`r toString(br(psi_off))`|
+
+Dalsza analiza dotyczyć będzie modelu logit wzbogaconego o interkacje zwanego dalej *modele**.
+W tabelach poniżej można zaobserwować, czy jakiś score pojawia się często, co może świadczyć o tym, że małe zmiany generują ryzyko zmiany oceny jakości modelu.
+
+Zbiór treningowy:
+
+```{r cache = T, eval = T, echo = F }
+t
+
+```
+
+Zbiór testowy:
+
+```{r cache = T, eval = T, echo = F }
+w
+
+```
+
+Rozkład nie kumuluje się w w poszczególnych wartościach.
+
+Analizę dopasowania i stabilności modelu przeprowadzono również na wybranym segemncie.Wartości statystyk dla segmentu, w którym znajdują się lepsi klienci,czyli Ci z którymi kontaktowano się już wcześniej:
+
+
+```{r,eval=TRUE, include=FALSE}
+#gini tylko dobrzy
+table(train$if_previous)
+train_g<-train[train$if_previous==1,]
+test_g<-test[test$if_previous==1,]
+gini_t_g<-2*auc(train_g$def,train_g$model,direction="<")-1
+gini_w_g<-2*auc(test_g$def,test_g$model,direction="<")-1
+
+ks_score_t_g<-ks.test(train_g[train_g$def==0,c("score")],train_g[train_g$def==1,c("score")])$statistic
+ks_score_w_g<-ks.test(test_g[test_g$def==0,c("score")],test_g[test_g$def==1,c("score")])$statistic
+
+psi_g<-cal_psi(data1=train_g, data2=test_g, bench="score",target="score",bin=20)
+ks_g<-ks.test(train_g$score,test_g$score)$p.value
+rm(train_g,test_g)
+
+```
+
+| statystyka             |     model     |
+| -------------           | ------------- |
+| Gini train                    | `r toString(br(gini_t_g))`      |
+| Gini test                    | `r toString(br(gini_w_g))`      |
+| KS train                  | `r toString(br(ks_score_t_g))`  |
+| KS test                 | `r toString(br(ks_score_w_g))`        |
+| PSI                     | `r toString(br(psi_g))`          |
+
+Przedstawione statystyki wskazują, że dopasowanie na zbiorze testowym jest lepsze niż na treningowym. Spowodowane to może być niezbilansowaniem próby.
+
+```{r, eval=TRUE,include=FALSE}
+
+#model max==========================================================================
+mdl<-"model"
+
+ocena_zmienne<-NULL
+ocena_modeli<-NULL
+zmienne_tab<-NULL
+
+
+
+
+temp_tab<-as.data.frame(cbind("Model"="model",
+                              
+                              'ist_param'=ist,
+                              "roc_test_baza"=roc_test_baza,
+                              "gof"=gof$gof$pVal[3],
+                              "hosmer"=hr$p.value,
+                              "gf"=gf,
+                              "ist_ogr"=ist,
+                              "roc_test_og"=roc_test_og,
+                              "gini_t_cil"=ci_delong_t[1],
+                              "gini_t"=gini_t,
+                              "gini_t_ciu"=ci_delong_t[3],
+                              "gini_w_cil"=ci_delong_w[1],
+                              "gini_w"=gini_w,
+                              "gini_w_ciu"=ci_delong_w[3],
+                              "ks_score_t"=ks_score_t,
+                              "ks_score_w"=ks_score_w,
+                              "psi"=psi,
+                              "ks_test"=ks,
+                              "gini_t_g"=gini_t_g,
+                              "gini_w_g"=gini_w_g,
+                              "ks_score_t_g"=ks_score_t_g,
+                              "ks_score_w_g"=ks_score_w_g,
+                              "psi_g"=psi_g,
+                              "ks_test_g"=ks_g,
+                              
+                              "t_1_n"=t[1,1],
+                              "t_1"=t[1,2],
+                              "t_2_n"=t[2,1],
+                              "t_2"=t[2,2],
+                              "t_3_n"=t[3,1],
+                              "t_3"=t[3,2],
+                              "w_1_n"=w[1,1],
+                              "w_1"=w[1,2],
+                              "w_2_n"=w[2,1],
+                              "w_2"=w[2,2],
+                              "w_3_n"=w[3,1],
+                              "w_3"=w[3,2]
+))
+
+
+ocena_modeli<-rbind(ocena_modeli,temp_tab)
+
+
+mdl<-"model_offset"
+
+
+temp_tab<-as.data.frame(cbind("Model"="model",
+                              
+                              'ist_param'=ist_off,
+                              "roc_test_baza"=NA,
+                              "gof"=gof_off$gof$pVal[3],
+                              "hosmer"=hr_off$p.value,
+                              "gf"=gf_off,
+                              "ist_ogr"=ist_off,
+                              "roc_test_og"=NA,
+                              "gini_t_cil"=ci_delong_toff[1],
+                              "gini_t"=gini_toff,
+                              "gini_t_ciu"=ci_delong_toff[3],
+                              "gini_w_cil"=ci_delong_woff[1],
+                              "gini_w"=gini_woff,
+                              "gini_w_ciu"=ci_delong_woff[3],
+                              "ks_score_t"=ks_score_toff,
+                              "ks_score_w"=ks_score_woff,
+                              "psi"=psi_off,
+                              "ks_test"=ks_off,
+                              "gini_t_g"=NA,
+                              "gini_w_g"=NA,
+                              "ks_score_t_g"=NA,
+                              "ks_score_w_g"=NA,
+                              "psi_g"=NA,
+                              "ks_test_g"=NA,
+                              
+                              "t_1_n"=t_off[1,1],
+                              "t_1"=t_off[1,2],
+                              "t_2_n"=t_off[2,1],
+                              "t_2"=t_off[2,2],
+                              "t_3_n"=t_off[3,1],
+                              "t_3"=t_off[3,2],
+                              "w_1_n"=w_off[1,1],
+                              "w_1"=w_off[1,2],
+                              "w_2_n"=w_off[2,1],
+                              "w_2"=w_off[2,2],
+                              "w_3_n"=w_off[3,1],
+                              "w_3"=w_off[3,2]
+))
+
+
+ocena_modeli<-rbind(ocena_modeli,temp_tab)
+
+```
+
+## Wykorzystanie algorytmu selekcji zmiennych
+W kolejnej części pracy model został oszacowany metodami stepwise, forward oraz backward, które same oceniają, które zmienne powinny znaleźć się w modelu (parametr k=8). Wyniki oszacowań kolejno poniżej. Widać, że każda z metod wybiera model ze wszystkimi zmiennymi.
+
+```{r, eval=TRUE,include=FALSE}
+
+model_stepwise_both<-step(baza, scope = list(upper=max, lower=baza ), direction = "both", trace=T,steps=30,k=8)
+# im większe k tym bardziej istotne zmienne bierzemy do modelu
+
+
+model_stepwise_for<-step(baza, scope = list(upper=max, lower=~1 ), direction = "forward", trace=T,steps=30,k=8)
+
+# upper = max albo model, jak damy k = 4 to będą takie wyniki jak w stepwise
+
+names(model_stepwise_both$coefficients)
+names(model_stepwise_for$coefficients)
+
+model_stepwise_b<-step(max,  direction = "backward", trace=T,steps=30,k=8)
+
+
+names(model_stepwise_b$coefficients)
+```
+
+Podsumowanie modelu z algorytmu *stepwise*:
+
+```{r cache = T, eval = T, echo = F }
+bp(model_stepwise_both)
+
+```
+
+Podsumowanie modelu z algorytmu *forward*:
+
+```{r cache = T, eval = T, echo = F }
+bp(model_stepwise_for)
+
+```
+
+Podsumowanie modelu z algorytmu *backward*:
+
+```{r cache = T, eval = T, echo = F }
+bp(model_stepwise_b)
+
+```
+
+W przypadku wszytskich trzech algotymów ostateczny model jest tej samej postaci. Diagnostyce i porównaniu z modelami *baza* i *max* poddany będzie model *stepwise*.
+
+Zmienne do modelu możemy też wybrać algorytmem selekcji zmiennych. Ponadto, jego wyniki stanowią analizę jakości dyskryminacyjnej zmiennych - im częściej zmienna wybierana jest do modelu (wiecej czarnych pól) tym większa siła.
+W ninijszym badaniu największą siłą dyskryminacyjna charakteryzują się zmienne:
+*year_woe*,*poutcome_woe* i *hausing_woe*. Z kolei najmniejszą: *contact_woe*, *loan_woe* i *marital_woe*.
+
+```{r,eval=TRUE, include=FALSE}
+# analiza najlepszych modeli z określoną liczbą zmiennych 
+# nbest = liczba najlepszych modeli dla kazdej liczby zmiennych
+# nvmax= malsymalana liczba zmiennych w modelu
+
+# np definiujemy, że model ma 5 zmiennych i model pokazuje najlepszą kombinację dostępnych 5 zmiennych
+
+model_nbest<-regsubsets(data[,3:14], data=data, y=data$def, nbest=1, nvmax=12)
+
+summary(model_nbest)$adjr2
+
+
+```
+
+```{r cache = T, eval = T, echo = F }
+plot(model_nbest, scale="adjr2") # dla AIC
+# wyświetla wszystkie najlepsze modele dla 1 - 11 zmiennych, u góry najlepszy z najlepszych
+plot(model_nbest, scale="bic") # dla BIC
+
+```
+
+```{r, include=FALSE,eval = T}
+
+
+# estymacja modelu tylko ze stałą - do porównań
+baza<-glm(def ~ 1,data=data[,c(1,3:14)], family=binomial("logit"))
+
+max<-glm(def ~ .,data=data[,c(1,3:14)], family=binomial("logit"))
+summary(max)
+
+
+
+mdl<-"model_stepwise_both"
+model<-model_stepwise_both
+
+```
+
+
+```{r,eval = T, include=FALSE}
+
+
+#test na jakość dopasowania modelu - zupelnie podstawowy
+# załozenie porównujemy uzyskany model z modele "idealnym" i sprawdzamy, czy uzyskana wartosc max wirogodności jest statystycznie bliska 0
+# H0: model jest dobrze dopasowany do danych
+gf_sb<-pchisq(model$deviance, model$df.residual,lower.tail = F)
+
+# test LR na istotoność zmiennych
+# sprawdzamy czy maxW dla modelu jest istotnie większe niż dla modelu tylko ze stała - test na laczna istotnosc modelu
+# H0  zmienne są łacznie nieistotne
+ist_sb<-pchisq(model$null.deviance-model$deviance, model$df.null-model$df.residual,lower.tail = F)
+
+# test Hosmera - Lemeshowa - podstawowy test na jakosc dopasowania w modelach dla binarnej zmiennej zaleznej
+# H0: model jest dobrze dopasowany do danych
+# ma wiele wad - przede wszystkim jest bardzo wrażliwy na liczbe przedziałów
+
+hr_sb<-hosmerlem(y=data$def, yhat=fitted(model),g=10)
+hosmerlem(y=data$def, yhat=fitted(model),g=7)
+hosmerlem(y=data$def, yhat=fitted(model),g=8)
+hosmerlem(y=data$def, yhat=fitted(model),g=9)
+#hr$p.value
+
+#Inne testy dopasowania
+# generalnie powinny być interpretowane łaczeni, każdy z nich analizuje nieco inną specyfikę dopasowania
+# jeżeli jeden to OR
+
+gof_sb<-gof(model, g=12)
+
+
+data$model_sb<-model$fitted.values
+
+# przeskalowanie wartosci dopasowana na wybrana skale
+# 660 punktów oznacza ODDS = 72 a ODDS się dubuluje co 40 punktów
+
+data$score_sb<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*model$linear.predictors
+
+# Przypisanie PD i SCORE do zbioru testowego i treningowego całego
+test$model_sb<-predict(model, newdata=test, type="response") 
+test$score_sb<-(660-40/log(1/2)*log(1/72))-40/log(1/2)*predict(model, newdata=test, type="link") 
+
+train$model_sb<-predict(model, newdata=train, type="response") 
+train$score_sb<-(660-40/log(1/2)*log(1/72))+40/log(1/2)*predict(model, newdata=train, type="link") 
+
+#test roc - sprawdza czy krzywa ROC jest istotnie lepsza dla dwóch modeli
+#H0 krzywe ROC są równie dobre
+roc_test_baza_sb<-roc.test(data$def, data$model, data$baza,method="d")$p.value
+roc_test_og_sb<-roc.test(data$def, data$max, data$model,method="d")$p.value
+
+
+
+hist(data[data$def==0,c("score_sb")])
+hist(data[data$def==1,c("score_sb")])
+```
+
+```{r,eval = T, include=FALSE}
+
+# współczynnik gini 
+# im wyższy tym rozkłady scorów u złych i dobrych klientów się od siebie różnią
+gini_t_sb<-2*auc(data$def,data$model_sb,direction="<")-1
+gini_w_sb<-2*auc(test$def,test$model_sb,direction="<")-1
+# a model max?
+2*auc(data$def,data$max,direction="<")-1
+
+
+
+# policzenie przedziałów ufności dla gini_t
+# method "delong" - analiztyczna postac; "bootstrap" szacowanie za pomcą bootstrap
+ci_delong_t_sb<-2*ci.auc(data$def, data$model_sb,method="d",direction="<")-1
+# 0.5494462 0.5667401 0.5840340
+ci_delong_w_sb<-2*ci.auc(test$def, test$model_sb,method="d",direction="<")-1
+# 0.5048344 0.5328832 0.5609319
+
+```
+
+
+```{r, include=FALSE}
+
+
+#statystyka K-S
+# statystyka testu Kolmogorova - Smirnova na podobieństwo dwóch rozkładów
+# porównywany są rozkłądy scorów u dobrych i u złych klientów,
+# im bardziej się od siebie różnią tym lepiej
+ks_score_t_sb<-ks.test(data[data$def==0,c("score_sb")],data[data$def==1,c("score_sb")])$statistic
+ks_score_w_sb<-ks.test(test[test$def==0,c("score_sb")],test[test$def==1,c("score_sb")])$statistic
+
+
+# stabilnosc modelu
+
+#PSI - sprawdza na ile dwa rozkłady różnią się od siebie - to jest IV tylko tym razem chcemy by było małe
+psi_sb<-cal_psi(data1=data, data2=test, bench="score_sb",target="score_sb",bin=20)
+
+# test Kolmogorowa Sminrnova na podobienstwo dwóch rozkladow 
+# porównywane są rozkłady scora w próbie trenującej i testującej
+# H0 dwa analizowane rozkłady są statystycznie nierozróżnialne
+
+ks_sb<-ks.test(data$score_sb,test$score_sb)$p.value
+
+#najczestsze scory - jeżeli powtarza się często jeden score, to małe zmiany generują ryzyko zmiany oceny jakości modelu
+t_sb<-as.data.frame(sort(table(data$score)/length(data$score),decreasing=T))[1:3,1:2]
+w_sb<-as.data.frame(sort(table(test$score)/length(test$score),decreasing=T))[1:3,1:2]
+
+
+mdl<-"model_sb"
+
+
+
+temp_tab<-as.data.frame(cbind("Model"="model_sb",
+                              
+                              'ist_param'=ist_sb,
+                              "roc_test_baza"=roc_test_baza_sb,
+                              "gof"=gof_sb$gof$pVal[3],
+                              "hosmer"=hr_sb$p.value,
+                              "gf"=gf_sb,
+                              "ist_ogr"=ist_sb,
+                              "roc_test_og"=roc_test_og_sb,
+                              "gini_t_cil"=ci_delong_t_sb[1],
+                              "gini_t"=gini_t_sb,
+                              "gini_t_ciu"=ci_delong_t_sb[3],
+                              "gini_w_cil"=ci_delong_w_sb[1],
+                              "gini_w"=gini_w_sb,
+                              "gini_w_ciu"=ci_delong_w_sb[3],
+                              "ks_score_t"=ks_score_t_sb,
+                              "ks_score_w"=ks_score_w_sb,
+                              "psi"=psi_sb,
+                              "ks_test"=ks_sb,
+                              "gini_t_g"=NA,
+                              "gini_w_g"=NA,
+                              "ks_score_t_g"=NA,
+                              "ks_score_w_g"=NA,
+                              "psi_g"=NA,
+                              "ks_test_g"=NA,
+                              
+                              "t_1_n"=t_sb[1,1],
+                              "t_1"=t_sb[1,2],
+                              "t_2_n"=t_sb[2,1],
+                              "t_2"=t_sb[2,2],
+                              "t_3_n"=t_sb[3,1],
+                              "t_3"=t_sb[3,2],
+                              "w_1_n"=w_sb[1,1],
+                              "w_1"=w_sb[1,2],
+                              "w_2_n"=w_sb[2,1],
+                              "w_2"=w_sb[2,2],
+                              "w_3_n"=w_sb[3,1],
+                              "w_3"=w_sb[3,2]
+))
+
+
+ocena_modeli<-rbind(ocena_modeli,temp_tab)
+
+```
+
+Dla modelu otrzymanego metodą *stepwise* przedstawiono statystyki i miary jakości dopasowania. Miary dopasowania są niższe niż w *modelu*, ponieważ nie uwzględnia jednej zmiennej(przez dość wysoki parametr k) oraz interakcji. Zauważalny jest spadek dopasowania na zbiorze testowym (Gnini spadł o około 1.3%).
+
+| nazwa testu/statystyki            |     model     |
+| -------------           | ------------- | 
+| Chi2                    | `r toString(br(gf_sb))`      |
+| LR                      | `r toString(br(ist_sb))`              |
+| Hosmer-Lemeshow         | `r toString(br(hr_sb$p.value))`    |
+| roc(model vs baza)      | `r toString(br(roc_test_baza_sb))`          |
+| roc(model vs max)       | `r toString(br(roc_test_og_sb))`              |
+| Gini train              | `r toString(br(gini_t_sb))`      |
+| Gini test               | `r toString(br(gini_w_sb))`      |
+| KS train                | `r toString(br(ks_score_t_sb))`  |
+| KS test                 | `r toString(br(ks_score_w_sb))`        |
+| PSI                     | `r toString(br(psi_sb))`          |
+
+
+Jednak jedynie w przypadku testu Skutela dla dodatkowego wektora *z1* nie ma podstaw do odrzucenia hipotezy zerowej o poprawnym dopasowaniu do danych.
+
+```{r cache = T, eval = T, echo = F }
+gof
+
+
+```
+
+
+
+Po porównaniu wszystkich szacowanych modeli i testów jakości dopasowania dla nich, do utworzenia karty scoringowej został wybrany model ze zmiennymi: stała, *job_woe*, *age_woe*, *education_woe*, *poutcome_woe*, *balance_woe*, *campaign_woe*, *marital_woe* oraz interakcji między *year_woe* a indykatorem sukcesu w poprzednim kontakcie, *contact_woe* a indykatorem wcześniejszej próby kontaktu i *housing_woe* a indykatorem liczby dni od poprzedniego kontaktu(+/-90 dni).
+
+```{r,eval = T, include=FALSE}
+model<-glm(def ~ year_woe:if_success
+           +poutcome_woe
+           +contact_woe:if_previous
+           +housing_woe:pdays2
+           +job_woe
+           +balance_woe
+           +age_woe      
+           +campaign_woe
+           +education_woe
+           +marital_woe
+           ,data=data, family=binomial("logit"))
+
+coeff<-as.data.frame(model$coefficients)
+coeff$Zmienna<-rownames(coeff)
+names(coeff)[1]<-"Parametr"
+names(coeff)[2]<-"Zmienna"
+```
+
+
+```{r, eval = T,include=FALSE}
+#ustawienie parametrow do skalowania scora
+
+score_points<-660 # odpowiada log_oddsom 1/72, skoki pomiędzy 40 punktami
+log_odds<-1/72
+ptd<-40
+```
+
+
+```{r,eval = T, include=FALSE}
+
+train$fpd<-model$fitted.values
+train$score_mod<-(score_points-ptd/log(1/2)*log(log_odds))-ptd/log(1/2)*model$linear.predictors
+# linear predictors to wartości teoretyczne logarytmu szans
+
+test$fpd<-predict(model, newdata=test, type="response") #prawdopodobienstwa
+test$score_mod<-(score_points-ptd/log(1/2)*log(log_odds))-ptd/log(1/2)*predict(model, newdata=test, type="link") # z opcją link
+
+```
+
+#Przygotowanie karty scoringowej
+
+Poniżej widać histogramy rozkładu dobrych i złych klientów
+
+```{r cache = T, eval = T, echo = F }
+#hist(train[train$def==0,c("score_mod")],col="green")
+#hist(train[train$def==1,c("score_mod")],col="red")
+hist<-ggplot(train,aes(x=score,group=as.factor(def),fill=as.factor(def)))+
+  geom_histogram(position="identity",alpha=0.5,binwidth=10)+theme_bw()
+hist
+```
+
+Na podstawie przeprowadzonej analizy możliwe jest przygotowanie karty scoringowej. Zastosowanie interakcji zmiennych *woe* ze zmienymi binarnymi nie wymaga szacowania oddzielnych miar dla interkacji, ponieważ ich wpływ zostanie uwzględniony w predykcji prawdopodbieństwa.
+Otrzymana karta przyjmuje następującą postać:
+
+
+```{r, eval = T,include=FALSE}
+zmienne<-names(model$coefficients)[-grep("Intercept",names(model$coefficients))]
+#mam interakcje z binarnymi, wiec woe moga zostac takie same, a impact interakcji bedzie 
+#z predyckji modelu
+zmienne<-unique(gsub(":.*","",zmienne))
+#zmienne_k<-c(1:(length(names(model$coefficients))-1))
+zmienne_k<-c(1:length(zmienne))
+
+names(zmienne_k)<-gsub("_woe","_coarse",zmienne)
+zm_k<-colnames(train)[which(colnames(train) %in% (names(zmienne_k)))]
+zmienne_k<-names(zmienne_k)
+zmienne_k<-zmienne_k[order(zmienne_k)]
+zmienne_k[4]<-"contact"
+zmienne_k[5]<-"education"
+zmienne_k[7]<-"job"
+zmienne_k[8]<-"marital"
+zmienne_k[10]<-"year"
+zmienne_k[6]<-"housing"
+zmienne_k[9]<-"poutcome"
+zmienne_k<-na.omit(zmienne_k)
+zmienne<-zmienne[order(zmienne)]
+zmienne_k<-zmienne_k[order(zmienne_k)]
+
+zmienne_c<-cbind(zmienne_k,zmienne)
+
+podzial<-data.frame(Zmienna=character(),Zmienna_c=character(),Groups=character(),WoE=character(),NR=numeric())
+for (i in 1:(length(zmienne))) {
+
+
+  # liczebnosc binów
+  tempa<-cbind(table(train[,zmienne_c[i]],useNA="always"))
+  # zastapienie missingow na pozotale
+  rownames(tempa)<-fct_explicit_na(rownames(tempa),na_level="OTHER_P")
+  tempa<-as.data.frame(tempa)
+  tempa$Groups<-rownames(tempa)
+  colnames(tempa)[1]<-"NR"
+  
+  #doklejenie WoE
+  tempb<-as.data.frame(cbind(table(train[,zmienne[i]])))
+  tempb$WoE<-rownames(tempb)
+  colnames(tempb)[1]<-"NR"
+  podz<-merge(tempa, tempb,by="NR")
+  podz<-cbind(zmienne[i],zmienne_c[i],podz)
+  colnames(podz)[1]<-"Zmienna"
+  colnames(podz)[2]<-"Zmienna_c"
+  
+  #doklejenie dla kazdej ze zmiennych 
+  podzial<-rbind(podzial,podz)
+  print(i)
+}
+podzial$Zmienna_org<-gsub("_woe","",podzial$Zmienna,ignore.case=T)
+podzial
+```
+
+
+```{r,eval = T, include=FALSE}
+karta<-NULL
+karta<-merge(x=coeff,y=podzial,by="Zmienna",all.x=T)
+#wybór zmiennych
+karta<-karta[,c("Zmienna_org","Zmienna_c","Zmienna","Groups","WoE","Parametr")]
+karta[,5]<-as.numeric(karta[,5])
+# Wyliczenie punktów scoringowych
+#karta$points<-round(((log(1/exp(karta[,6]*karta[,5]+karta[1,6]))+log(log_odds)-score_points/ptd*log(2))/(log(2)/ptd))-((log(1/exp(karta[1,6]))+log(log_odds)+score_points/ptd*log(2))/(log(2)/ptd)),digit=4)
+#karta$points[1]<-round((log(1/exp(karta[1,6]))+log(log_odds)+score_points/ptd*log(2))/(log(2)/ptd),digit=4) 
+karta$points<--round(((log(1/exp(karta[,6]*karta[,5]+karta[1,6]))+log(log_odds)+score_points/ptd*log(2))/(log(2)/ptd))-((log(1/exp(karta[1,6]))+log(log_odds)+score_points/ptd*log(2))/(log(2)/ptd)),digit=4)
+karta$points[1]<-round((log(1/exp(karta[1,6]))+log(log_odds)+score_points/ptd*log(2))/(log(2)/ptd),digit=4) 
+summary(train$score)
+karta
+```
+
+
+
+```{r,cache=T,eval = T}
+kh(karta)
+
+```
+
+##Rating
+
+Na podstawie skalibrowanego rozkładu prawdopodobieństwa, zaproponowano klasy ratingowe. Poniżej zaprezentowano emipryczne prawdopodbieństwo udanej sprzedaży w klasach. Podział na klasy stanowi segmentację klientów, która może być użyteczna przy wyznaczaniu grup docelowych klientów.
+
+```{r,eval = T, include=FALSE}
+
+model_calib<-glm(def	~ score_mod,data=train, family=binomial("logit"))
+
+train$int_calib<-model_calib$coefficients[1]
+train$slope_calib<-model_calib$coefficients[2]
+train$ln_odds_calib<-train$int_calib+train$slope_calib*train$score_mod
+train$score_calib<-(score_points-ptd/log(1/2)*log(log_odds))-ptd/log(1/2)*train$ln_odds_ca
+train$prob_calib<-exp(train$ln_odds_calib)/(exp(train$ln_odds_calib)+1)
+
+summary(train$prob_calib)
+quantile(train$prob_calib,probs=seq(0,1,0.025))
+hist(train[train$prob_calib<0.1,"prob_calib"])
+
+train$KL_RaT<-ifelse(train$prob_calib<0.025,1,
+                     ifelse(train$prob_calib<0.035,2,
+                            ifelse(train$prob_calib<0.045,3,
+                                   ifelse(train$prob_calib<0.055,4,
+                                          ifelse(train$prob_calib<0.07,5,
+                                                 ifelse(train$prob_calib<0.1,6,
+                                                        ifelse(train$prob_calib<0.114,7,
+                                                               ifelse(train$prob_calib<0.1315,8,
+  ifelse(train$prob_calib<0.1565,9,
+    ifelse(train$prob_calib<0.1969,10,
+           ifelse(train$prob_calib<0.2551,11,
+                  ifelse(train$prob_calib<0.3031,12,
+                         ifelse(train$prob_calib<0.4278,13,
+                                ifelse(train$prob_calib<0.5625,14,15))))))))))))))
+table(train$KL_RaT)
+
+train$GR_RYZ<-ifelse(train$KL_RaT<4,"F",
+                    ifelse(train$KL_RaT<7,"E",
+                           ifelse(train$KL_RaT<9,"D",
+                                  ifelse(train$KL_RaT<11,"C",
+                                         ifelse(train$KL_RaT<13,"B","A")))))
+table(train$GR_RYZ,train$def)
+prop.table(table(train$GR_RYZ,train$def),1)
+
+
+# cost ratio = (FP-TN)/(FN-TP)
+cr<-(-49-1)/(-1-50)
+
+table(train$def)
+
+#cutpoint1 <- optimal.cutpoints(X = score~def, tag.healthy = 0, methods = c("Youden", "MaxSpSe","SpEqualSe","ROC01","MaxEfficiency","CB","MinPvalue"), data = train,
+ #                              direction=">", control = control.cutpoints(costs.ratio=cr), #ci.fit = TRUE, trace=T)
+#cutpoint1 <- optimal.cutpoints(X = score~def, tag.healthy = 0, methods = c("Youden"), data = train,
+#                               direction=">", control = control.cutpoints(costs.ratio=cr), ci.fit = TRUE, trace=T)
+
+#summary(cutpoint1)
+
+#mean(train[,"def"])
+
+# CRITERION: Youden
+#mean(train[train$score>=497.2084681,"def"])
+#length(train$score[train$score>=497.2084681])/length(train$score)
+
+# CRITERION: MaxSpSe
+#mean(train[train$score>=504.8888745,"def"])
+#length(train$score[train$score>=504.8888745])/length(train$score)
+
+# CRITERION: MaxEfficiency
+#mean(train[train$score>=421.3462007,"def"])
+#length(train$score[train$score>=421.3462007])/length(train$score)
+
+# CRITERION: CB
+#mean(train[train$score>=520.9173378,"def"])
+#length(train$score[train$score>=520.9173378])/length(train$score)
+
+# CRITERION: MinPvalue
+#mean(train[train$score>=302.04645650,"def"])
+#length(train$score[train$score>=302.04645650])/length(train$score)
+
+# INNE CB
+#cr<-(-10-0)/(-150-10)
+
+#cutpoint2 <- optimal.cutpoints(X = score~def, tag.healthy = 0, methods = c("CB"), data = train,
+                    #           direction=">", control = control.cutpoints(costs.ratio=cr), ci.fit = TRUE, trace=T)
+#summary(cutpoint2)
+
+# CRITERION: CB
+#mean(train[train$score>=551.0822860,"def"])
+#length(train$score[train$score>=551.0822860])/length(train$score)
+```
+
+
+```{r,cache=T,eval = T}
+br(prop.table(table(train$GR_RYZ,train$def),1))
+
+```
+
+Monotoniczny charakter ratingu potwierdza, że zastosowana metodologia może być zastosowana w celach segmentacji klientów oraz selekcji profili z największym prawdopodbieństwem sukcesu.
+
+
+```{r,eval = T, include=FALSE}
+
+load("cutpoint1.rdata")
+load("cutpoint2.rdata")
+youden1<-cutpoint1$Youden$Global$optimal.cutoff$cutoff
+maxspse1<-cutpoint1$MaxSpSe[[1]]$optimal.cutoff$cutoff
+spewual1<-cutpoint1$SpEqualSe[[1]]$optimal.cutoff$cutoff  
+roc011<-cutpoint1$ROC01[[1]]$optimal.cutoff$cutoff  
+maxeff1<-mean(cutpoint1$MaxEfficiency[[1]]$optimal.cutoff$cutoff)
+minp1<-cutpoint1$MinPvalue[[1]]$optimal.cutoff$cutoff
+cb1<-cutpoint1$CB[[1]]$optimal.cutoff$cutoff
+```
+
+## Optymalny punkt odcięcia
+
+Ostatnim etapem analizy jest dobranie optymalnego punktu odcięcia. Przy założeniu, że cost ratio przyjmuje następującą postać:  (FP-TN)/(FN-TP)=(-10-0)/(-50-10), otrzymane punkty odcięcia scoru są następujące:
+
+  | nazwa             |     wartosc dla cp1    |
+  | -------------           | ------------- |
+  | Youden                    | `r toString(br(youden1))`      |
+  | MaxSpSe                      | `r toString(br(maxspse1))`     |
+  | SpEqualSe           | `r toString(br(spewual1))`    |
+  | ROC01           | `r toString(br(roc011))`          |
+  | MaxEfficiency       | `r toString(br(maxeff1))`              |
+  | MinPvalue              | `r toString(br(minp1))`      |
+  | CB              | `r toString(br(cb1))`      |
+
+Sprawdzenie:
+Zakładając, że jako optymalny punkt odcięcia został wybrany na podstawie algorytmu Youdena to srednie prawdopodbieństwo empiryczne na próbie treningowej klientów o scorze wyższym niż zakładany wynosi `r toString(round(mean(train[train$score>=youden1,"def"],),4))` i dotyczy
+`r toString(round(length(train$score[train$score>=youden1])/length(train$score),4))` populacji.
+
+#Podsumowanie
+
+Praca miała na celu stworzenie najlepszego modelu szacującego prawdopodobieństwo skuteczności kampanii reklamowej portugalskiego banku przy użyciu standardowego modelu logitowego, z wykorzystaniem metody xgboost, która pozwoliła znaleźć istotne interakcje między zmiennymi. Została również dokonana segmentacja klientów, co pozwoli adresować kampanię do najlepszych klientów. Ocena jakości dopasowania modelu dała zadowalające rezultaty, wskaźnik Giniego wyniósł ponad 60% zarówno na próbie treningowej jak i walidacyjnej.
