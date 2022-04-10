@@ -1,0 +1,575 @@
+---
+title: "Analiza porównawcza ryzyka rozumianego jako oszacowanie funkcji warunkowej wariancji w modelach klasy GARCH"
+author: "Anna Głowacka, Alla Boiko"
+date: '30.06.2017'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+#Wprowadzenie
+
+Celem badania jest przeprowadzanie analizy ryzyka dla warunkowej wariancji a także dla wartości narażonej na ryzyko w okresie in-sample i out-of-sample. Analizę przeprowadzono dla modelu GARCH i dwóch jego rozszerzeń: TGARCH oraz GARCH-t. Na końcu przeprowadzono analizę wrażliwości, która miała pokazać jak przyjęcie początkowych założeń wpływa na ostateczny wynik.
+
+#Metodologia
+
+ Pierwszym krokiem w przeprowadzonej analizie był dobór pięciu instrumentów wybranych spośród walut, ideksów i akcji. Dane pobrano ze strony https://stooq.com/. Za interesujące uznane zostały euro, funt brytyjski, dolar amerykański, notowania The Coca-Cola Company oraz Dow Jones & Company.Na początku wczytano niezbędne biblioteki: xts, fBasics, tseries, car, FinTs, rugarch oraz fGarch. 
+
+
+Wczytujemy dane
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(xts)
+library(fBasics)
+library(tseries)
+library(car) 
+library(FinTS)
+library(rugarch)
+library(fGarch)
+```
+
+```{r}
+url_EUR <- "https://stooq.com/q/d/l/?s=eurpln&i=d"
+url_GBP <- "https://stooq.com/q/d/l/?s=gbppln&i=d"
+url_USD <- "https://stooq.com/q/d/l/?s=usdpln&i=d"
+url_COLA <- "https://stooq.com/q/d/l/?s=ko.us&i=d"
+url_DJI <- "https://stooq.com/q/d/l/?s=^dji&i=d"
+EUR <- read.csv(url_EUR, header = TRUE, sep = ",", dec = ".", stringsAsFactors = F)
+GBP <- read.csv(url_GBP, header = TRUE, sep = ",", dec = ".", stringsAsFactors = F)
+USD <- read.csv(url_USD, header = TRUE, sep = ",", dec = ".", stringsAsFactors = F)
+COLA <- read.csv(url_COLA, header = TRUE, sep = ",", dec = ".", stringsAsFactors = F)
+DJI <- read.csv(url_DJI, header = TRUE, sep = ",", dec = ".", stringsAsFactors = F)
+```
+
+```{r echo=FALSE}
+EUR$Date <- as.Date(as.character(EUR$Date),"%Y-%m-%d")
+EUR <- EUR[, c("Date", "Close")]
+colnames(EUR) <- c("Date", "EUR")
+GBP$Date <- as.Date(as.character(GBP$Date),"%Y-%m-%d")
+GBP <- GBP[, c("Date", "Close")]
+colnames(GBP) <- c("Date", "GBP")
+DJI$Date <- as.Date(as.character(DJI$Date),"%Y-%m-%d")
+DJI <- DJI[, c("Date", "Close")]
+colnames(DJI) <- c("Date", "DJI")
+COLA$Date <- as.Date(as.character(COLA$Date),"%Y-%m-%d")
+COLA <- COLA[, c("Date", "Close")]
+colnames(COLA) <- c("Date", "COLA")
+USD$Date <- as.Date(as.character(USD$Date),"%Y-%m-%d")
+USD<- USD[, c("Date", "Close")]
+colnames(USD) <- c("Date", "USD")
+```
+
+W następnym kroku dla wczytanych instrumentów ustalono datę początkową:
+
+```{r}
+date <- max(min(EUR$Date), min(GBP$Date), min(DJI$Date), min(COLA$Date), min(USD$Date))
+EUR  <- EUR[as.Date(date) <= EUR$Date, ]
+
+```
+```{r echo=FALSE}
+GBP  <- GBP[as.Date(date) <= GBP$Date, ]
+DJI  <- DJI[as.Date(date) <= DJI$Date, ]
+COLA  <- COLA[as.Date(date) <= COLA$Date, ]
+USD  <- USD[as.Date(date) <= USD$Date, ]
+```
+
+```{r}
+m1<-merge(EUR, GBP, by="Date")
+m2<-merge(m1, USD, by="Date")
+m3<-merge(m2, DJI, by="Date")
+m4<-merge(m3, COLA, by="Date")
+```
+
+
+Obliczono ciągłe stopy zwrotu dla wszystkich pięciu instrumentów:
+
+```{r}
+m4$EURr <- diff.xts(log(m4$EUR))
+m4$GBPr <- diff.xts(log(m4$GBP))
+m4$USDr <- diff.xts(log(m4$USD))
+m4$DJIr <- diff.xts(log(m4$DJI))
+m4$COLAr <- diff.xts(log(m4$COLA))
+```
+
+Na podstawie, których utworzono uśrednione zwroty oraz notowania. Zgodnie z założeniami portfela równoważonego (ang.equally-weighted portfolio), aktywa będą miały równe wagi:
+
+```{r}
+zwrot<-(m4$EURr+m4$GBPr+m4$USDr+m4$DJIr+m4$COLAr)/5
+
+notowania<-(m4$EUR+m4$GBP+m4$USD+m4$DJI+m4$COLA)/5
+```
+
+Wykorzystując średnie zwroty i notowania utworzono ramkę danych dla portfela równoważonego w skład której wchodziły także data i numer obserwacji:
+
+```{r}
+Portfel <- data.frame(m4$Date, zwrot, notowania, 1:length(m4$EUR))
+colnames(Portfel) <- c("Date", "Zwroty", "Notowania", "obs")
+```
+
+#Wstępna analiza danych
+
+Na wstępie wygenerowano wykres dziennych zwrotów i notowań z portfela:
+
+```{r}
+par(mfrow = c(2, 1))
+plot(Portfel$Date, Portfel$Zwroty, type = "l", col="red", lwd = 1, main = "Stopy zwrotu")
+plot(Portfel$Date, Portfel$Notowania, type = "l", col = "black", lwd = 1,  main = "Notowania")
+par(mfrow = c(1, 1))
+```
+Na podstawie wykresów można stwierdzić, że dla zbudowanego portfela szereg nie jest stacjonarny. Widoczny jest efekt grupowania wariancji (ang. volatility clustering). Oznacza to, że wariancja składnika losowego jest ze sobą powiązana, a kwadraty reszt modelu dla sąsiednich obserwacji są ze sobą skorelowane, czyli $cov(e_t^2, e_{t-k}^2)\neq 0$ dla pewnej wartości k>0 (źródło: M. Sikorska, K. Boczkowski, "Analiza finansowych szeregów czasowych w pakiecie R- modele i metody"). Widoczna jest zmienność wariancji w czasie dla okresów 1985-1990 oraz dla 2009 roku.
+
+W następnym kroku zbadamy normalność zwrotów z portfela. Zobaczmy jak wyglądają wykresy ACF dla zwrotów i kwadratów zwrotów:
+```{r}
+acf(Portfel$Zwroty, lag.max = 36, na.action = na.pass,
+    col = "darkblue", lwd = 7,
+    main = "Wykres ACF zwrotów") 
+```
+
+Dla wykresu ACF zwrotów wnioskujemy, że występuje zależność dla logarytmicznych stóp zwrotu - dlatego można estymować wartości oczekiwanych stóp zwrotu na podstawie ich przeszłych wartości. Widoczna jest także autokorelacja dla badanych danych.
+
+Wykres ACF kwadratów zwrotów:
+```{r}
+acf(Portfel$Zwroty^2, lag.max = 100, na.action = na.pass,
+    col = "darkblue", lwd = 7,
+    main = "Wykres ACF kwadratów zwrotów")
+```
+
+Wykres ACF kwadratów zwrotów pokazuje wyraźną zależność pomiędzy kwadratami logarytmicznych stóp zwrotu, co wskazuje na występowanie zależności wyższego rzędu. Istnieje zależność w wariancji, którą da się modelować. Dla pewności w dalszych krokach, przeprowadzono test na występowanie efektów ARCH.
+
+Zbadano czy stopy zwrotu pochodzą z rozkładu normalnego. Do wstępnej analizy zbudowano histogram wraz z nałożoną na niego funkcją gęstości rozkładu normalnego. Jego wygląd (smuklejszy niż funkcja gęstości rozkładu normalnego) świadczy o występowaniu grubych ogonów (ang. thick tails) i asymetrii.
+
+```{r}
+hist(Portfel$Zwroty, prob = T, breaks = 100, main = "Histogram zwrotów")
+curve(dnorm(x, mean = mean(Portfel$Zwroty, na.rm = T), sd = sd(Portfel$Zwroty, na.rm = T)),
+      col = "darkblue", lwd = 2, add = TRUE)
+```
+
+W celu potwierdzenia przypuszczeń wygenerowano podstawowe charakterystyki dla zwrotów z portfela:
+
+```{r}
+basicStats(Portfel$Zwroty)
+```
+
+Badany zbiór należy do przedziału [ -0.145963,0.237689]. Współczynnik skośności jest dodatni a także średnia jest większa od mediany, co wskazuje na asymetrię prawostronną. Wartość kurtozy (miary spłaszczenia rozkładu) to 157.022657, co wskazuje na leptokurtyczność rozkładu.
+
+W dalszej analizie przeprowadzono test Jarque-Bera do zweryfikowania hipotezy o normalności składnika losowego: 
+```{r}
+jarque.bera.test(na.omit(Portfel$Zwroty))
+```
+
+Badamy hipotezę zerową $H_0$: $e_t \sim N(0, \sigma^2)$ (składnik resztowy posiada rozkład normalny). Ponieważ pvalue $< 5\%$, więc z dużym prawdopodobieństwem możemy odrzucić hipotezę zerową. Zwroty z portfela nie mają rozkładu normalnego.
+
+W następnym kroku wykorzystano test Durbina Watsona na autokorelację reszt dla pierwszych pięciu opóźnień: 
+```{r}
+durbinWatsonTest(lm(Portfel$Zwroty ~ 1), max.lag = 5)
+durbinWatsonTest(lm(Portfel$Zwroty^2 ~ 1), max.lag = 5)
+```
+
+Badamy hipotezę zerową $H_0$ o braku autokorelacji składnika resztowego. Ponieważ pvalue $< 5\%$, więc z dużym prawdopodobieństwem możemy odrzucić hipotezę zerową. Składnik resztowy podlega autokorelacji.
+
+
+W dalszej analizie zastosowano test na wystepowanie efektów ARCH:
+```{r}
+ArchTest(Portfel$Zwroty, lags = 5)
+
+```
+
+Dla instrumentów finansowych dla dziennych stóp zwrotu pojawia się problem heteroskedastyczności warunkowej. Do sprawdzenia czy zwroty z portfela równoważonego mają własność grupowania wariancji wykorzystano test Engle'a efektu ARCH. Testowano hipotezę zerową o braku występowania efektu ARCH. Wywnioskowano, że w szeregu stóp zwrotu występuje zjawisko grupowania się zmienności. Kwadraty zwrotów charakteryzują się silną autokorelacją.
+
+W kolejnym kroku nałożono ograniczenia czasowe dla badanego zbioru danych
+```{r}
+Portfel2  <- Portfel[Portfel$Date <= as.Date("2009-01-05"), ]
+Portfel2  <- Portfel2[as.Date("2000-01-05") <= Portfel2$Date, ]
+```
+
+
+Wystandaryzowano zwroty:
+```{r}
+Portfel2$rstd <- (Portfel2$Zwroty - mean(Portfel2$Zwroty, na.rm=T)) /
+  sd(Portfel2$Zwroty ,na.rm = T)
+tail(Portfel2$rstd)
+```
+
+Dla wystandaryzowanych zwrotów wygenerowano histogram:
+```{r}
+hist(Portfel2$rstd, prob = T, breaks = 40, main ="Histogram standaryzowanych zwrotów")
+curve(dnorm(x, mean = mean(Portfel2$rstd, na.rm = T),
+            sd  = sd(Portfel2$rstd, na.rm = T)),
+      col = "darkblue", lwd = 2, add = TRUE)
+```
+
+Na podstawie histogramu wywnioskowano, że rozkład jest leptokurtyczny, dla zweryfikowania poprawności oceny wygenerowano podstawowe statystyki opisowe standaryzowanych zwrotów:
+```{r}
+basicStats(Portfel2$rstd)
+```
+
+Badany zbiór należy do przedziału [-5.669734,  7.574408]. Współczynnik skośności jest dodatni a także średnia jest większa od mediany, co wskazuje na asymetrię prawostronną. Wartość kurtozy (miary spłaszczenia rozkładu) to 5.331199, co wskazuje na leptokurtyczność rozkładu.
+
+
+# Oszacowania warunkowej wariancji z wykorzystaniem rozszerzeń GARCH (TGARCH, GARCH-t)
+
+Powstanie modeli klasy GARCH umożliwiło opisanie zjawiska tzw. grupowania zmienności stóp zwrotu. Początkowo przyjmowano założenie o warunkowej normalności składnika losowego, które w przypadku większości procesów finansowych nie jest spełnione z powodu występowania wysokiej kurtozy oraz asymetrii warunkowych rozkładów stóp zwrotów. Problem ten rozwiązywano przez wprowadzenie asymetrycznych rozkładów zawierających grube ogony, najczęściej skośnego rozkładu t-Studenta. Możliwości wykorzystania tego rozkładu w przypadku dodatkowej analizy danych śróddziennych są jednak ograniczone (źródło: M. Sikorska, K. Boczkowski, “Analiza finansowych szeregów czasowych w pakiecie R- modele i metody”).
+
+W modelu GARCH(p,q) równanie warunkowej wariancji ma postać:
+$$\sigma_t^2 = \omega +\sum_{j=1}^q\alpha_j u_{t-j}^2 +\sum_{j=1}^p \beta_j\sigma_{t-j}^2$$
+
+Estymacja modelu GARCH(1,1)
+```{r}
+spec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0, 0), include.mean = T),
+                   distribution.model = "norm")
+k.garch11 <- ugarchfit(spec = spec, data = na.omit(Portfel2$Zwroty))
+k.garch11
+```
+
+Parametry modelu GARCH(1,1):
+```{r}
+k.garch11@fit$coef
+```
+
+W wyniku przeprowadzonej estymacji uzyskaliśmy model, który nie spełnia założeń. Część parametrów nie jest istotna statystycznie ($\mu$ i $\omega$). Parametry $\alpha$ i $\beta$ są dodatnie i istotne, a ich suma jest mniejsza od jedynki (`r k.garch11@fit$coef["alpha1"]+k.garch11@fit$coef["beta1"]` $< 1$). 
+
+Wykres ACF kwadratów wystandaryzowanych reszt:
+```{r}
+plot(k.garch11, which = 11)
+```
+
+Z testu Ljung-Boxa dla kwadratów wystandaryzowanych reszt i korelogramu wynika, że nie ma podstaw do odrzucenia hipotezy mówiącej o tym, że kwadraty wystandaryzowanych reszt nie są skorelowane. Ponadto na podstawie testu LM ARCH z dużym prawdopodobieństwem możemy stwierdzić, że wśród reszt modelu nie występują efekty ARCH. Dla badanego modelu uzyskano wartość kryterium informacyjnego AIC=-7.6695.W kolejnych krokach próbowano znaleźć model spełniający wszystkie założenia, jednak nie uzyskano oczekiwanego rezultatu.
+
+W pracy wykorzystujemy również 2 rozszerzenia modelu GARCH: TGARCH oraz GARCH-t. 
+Model TGARCH charakteryzuje się tym, że równanie warunkowej wariancji ma postać:
+
+$$\sigma_t^2 = \omega +\sum_{j=1}^q\alpha_j u_{t-j}^2 +\sum_{j=1}^p \beta_j\sigma_{t-j}^2+\sum_{j=1}^r \eta_{jj} D_{t-j}u_{t-j}^2$$
+gdzie $D_{t-j}$ to zmienna zerojedynkowa przyjmująca wartość 1 gdy reszta w okresie $(t-j)$ była ujemna i 0 w pozostałych przypadkach. 
+
+Model umożliwia modelowanie efektu asymetrii informacji, czyli odmiennego wpływu dodatnich i ujemnych stóp zwrotu na warunkową wariancję.
+
+Estymacja modelu TGARCH(2,1)
+
+```{r}
+spec2 <- ugarchspec(variance.model = list(model = "fGARCH", garchOrder = c(2, 1), submodel = "TGARCH"),
+                  mean.model = list(armaOrder = c(0, 0), include.mean = F),
+                  distribution.model = "norm")
+k.tgarch21 <- ugarchfit(spec = spec2, data = na.omit(Portfel2$Zwroty))
+k.tgarch21
+```
+
+Parametry modelu TGARCH(2,1) wynoszą:
+```{r}
+k.tgarch21@fit$coef
+```
+
+W modelu zostały spełnione założenia: $\alpha_1+ \alpha_2 +\beta_1 =$  `r k.tgarch21@fit$coef["alpha1"]+k.tgarch21@fit$coef["alpha2"]+k.tgarch21@fit$coef["beta1"]` $< 1$, a także parametry są dodatnie i istotne statystycznie ( z wyjątkiem $\eta_{11}$ i $\eta_{12}$). Test Ljung-Boxa dla kwadratów wystandaryzowanych reszt wskazuje, że mamy podstawy do odrzucenia hipotezy mówiącej o tym, że kwadraty wystandaryzowanych reszt nie są skorelowane. Ponadto na podstawie testu LM ARCH z dużym prawdopodobieństwem możemy stwierdzić, że wśród reszt modelu nie wystepują efekty ARCH. Dla badanego modelu uzyskano wartość kryterium informacyjnego AIC=-7.6669. W pozostałych przypadkach uzyskano oszacowania parametrów niespełniające założeń modelu.
+
+Wykres ACF kwadratów wystandaryzowanych reszt: 
+
+```{r}
+plot(k.tgarch21, which = 11)
+```
+
+Na podstawie korelogramu wśród kwadratów wystandaryzowanych reszt nie występuje autokorelacja, kłóci się to z wynikiem testu Ljung-Boxa.
+
+Zastosujemy również model GARCH-t. Różnica się od standardowego modelu GARCH rozkładem dystrybuanty- jest to dystrybuanta pochodząca z rozkładu t-Studenta.
+
+Estymacja modelu GARCH-t(1,1).
+
+```{r}
+spec3 <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+        mean.model = list(armaOrder = c(0, 0), include.mean = F),
+        distribution.model = "std")
+k.garcht11 <- ugarchfit(spec=spec3, data=na.omit(Portfel2$Zwroty))
+k.garcht11
+```
+
+Parametry modelu GARCH-t(1,1):
+```{r}
+k.garcht11@fit$coef
+```
+
+Dla modelu został spełniony warunek $\alpha_1+\beta_1 =$ `r k.tgarch21@fit$coef["alpha1"]+k.tgarch21@fit$coef["beta1"]` i jest $< 1$, wszystkie parametry dodatnie i istotne statystycznie (oprócz $\omega$ ). Na podstawie testu Ljung-Boxa dla kwadratów wystandaryzowanych reszt można z dużym prawdopodobieństwem stwierdzić, że kwadraty wystandaryzowanych reszt nie są skorelowane. Ponadto na podstawie testu LM ARCH wnioskujemy, że wśród reszt modelu nie wystepują efekty ARCH. Dla badanego modelu uzyskano wartość kryterium informacyjnego AIC=-7.6861. 
+
+Wykres ACF kwadratów wystandaryzowanych reszt:
+```{r warning=FALSE, message=FALSE}
+plot(k.garcht11, which = 11)
+```
+
+Dla korelogramu wśród kwadratów wystandaryzowanych reszt nie występuje autokorelacja. Model jest poprawny. 
+
+Porównajmy kryteria informacyjne dla tych modeli:
+
+|  | GARCH(1,1) | TGARCH(2,1) | GARCH-t(1,1) |
+|:------:|:------:|:------:|:------:|
+| Akaike | -7.6695 | -7.6669 | -7.6861 |
+| Bayes | -7.6592 | -7.6516 | -7.6759 |
+| Shibata | -7.6695 | -7.6669 | -7.6861 |
+| Hannan-Quinn |-7.6657 | -7.6613 | -7.6824 |
+
+Wśród trzech modeli najlepszym jest model GARCH-t(1,1), wszystkie kryteria informacyjne wskazują na ten model (najniższe wartości).
+
+# Oszacowania wartości narażonej na ryzyko w okresie in-sample
+
+W kolejnym kroku obliczona zostanie wartość narażona na ryzyko (ang. Value at Risk) rozumiana jako poziom straty, który może zostać przekroczony z prawdopodobieństwem równym $\alpha$. Policzono wartość narażonej na ryzyko w okresie in-sample dla modelu GARCH(1,1) a otrzymane wartości porównane zostaną z odpowiednimi wartościami uzyskanymi dla modeli TGARCH(2,1) oraz GARCH-t(1,1). Wybrano przedział czasowy dla okresu in-sample od 2008-01-05 do 2009-01-05 roku. Przedział czasowy dla portfela został podzielony na 3 podokresy. Z drugiego okresu wyodrębniłyśmy rok obejmujący kryzys finansowy. W out-of-sample chcemy zobaczyć jak kształtował się portfel po kryzysie.
+
+Obliczanie VaR dla modelu GARCH(1,1), TGARCH(1,1) i GARCH-t(1,1):
+```{r warning=FALSE, message=FALSE}
+q011 <- quantile(Portfel2$rstd, 0.01, na.rm = T)
+Portfel2$VaR <- q011 * k.garch11@fit$sigma
+Portfel2$VaR2 <- q011 * k.tgarch21@fit$sigma
+Portfel2$VaR3 <- q011 * k.garcht11@fit$sigma
+tail(Portfel2)
+```
+
+Przedstawimy na wykresie dzienne stopy zwrotu oraz wartości VaR dla różnych modeli: 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel2$Date, Portfel2$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), main = "Zwroty i VaR dla GARCH(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel2$Date, Portfel2$VaR, type = 'l', col = "green")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel2$Date, Portfel2$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), main = "Zwroty i VaR dla TGARCH(2,1)")
+abline(h = 0, lty = 2)
+lines(Portfel2$Date, Portfel2$VaR2, type = 'l', col = "blue")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel2$Date, Portfel2$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), main = "Zwroty i VaR dla GARCH-t(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel2$Date, Portfel2$VaR3, type = 'l', col = "yellow")
+```
+
+
+Policzymy w ilu przypadkach straty przekroczyły zakładane poziomy VaR.
+Dla modelu GARCH(1,1) w `r sum(Portfel2$Zwroty < Portfel2$VaR) / length(Portfel2$VaR)*100` \%, dla modelu TGARCH(2,1) w `r sum(Portfel2$Zwroty < Portfel2$VaR2) / length(Portfel2$VaR2)*100` \% i dla modelu GARCH-t(1,1) w `r sum(Portfel2$Zwroty < Portfel2$VaR3) / length(Portfel2$VaR3)*100` \%.
+
+Zawęzimy próbę do ostatniego roku:
+
+```{r}
+Portfel3  <- Portfel[Portfel$Date <= as.Date("2009-01-05"), ]
+Portfel3  <- Portfel3[as.Date("2008-01-05") <= Portfel3$Date, ]
+```
+
+Dla tej próby liczymy VaR:
+```{r warning=FALSE, message=FALSE}
+Portfel3$rstd <- (Portfel3$Zwroty - mean(Portfel3$Zwroty, na.rm = T)) /
+  sd(Portfel3$Zwroty, na.rm = T)
+q012 <- quantile(Portfel3$rstd, 0.01, na.rm = T)
+k2.garch11 <- ugarchfit(spec = spec, data = na.omit(Portfel3$Zwroty))
+Portfel3$VaR <- q012 * k2.garch11@fit$sigma
+k2.tgarch21 <- ugarchfit(spec = spec2, data = na.omit(Portfel3$Zwroty))
+Portfel3$VaR2 <- q012 * k2.tgarch21@fit$sigma
+k2.garcht11 <- ugarchfit(spec = spec3, data = na.omit(Portfel3$Zwroty))
+Portfel3$VaR3 <- q012 * k2.garcht11@fit$sigma
+tail(Portfel3)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel3$Date, Portfel3$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1),format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie in-sample dla GARCH(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel3$Date, Portfel3$VaR, type = 'l', col = "green")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel3$Date, Portfel3$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie in-sample dla TGARCH(2,1)")
+abline(h = 0, lty = 2)
+lines(Portfel3$Date, Portfel3$VaR2, type = 'l', col = "blue")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel3$Date, Portfel3$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie in-sample dla GARCH-t(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel3$Date, Portfel3$VaR3, type = 'l', col = "yellow")
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel3$Date, Portfel3$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie in-sample")
+abline(h = 0, lty = 2)
+lines(Portfel3$Date, Portfel3$VaR, type = 'l', col = "green")
+lines(Portfel3$Date, Portfel3$VaR2, type = 'l', col = "blue")
+lines(Portfel3$Date, Portfel3$VaR3, type = 'l', col = "yellow")
+legend("bottom", legend=c("GARCH(1,1)","TGARCH(2,1)","GARCH-t(1,1)"), lwd=c(2,2), col=c("green","blue","yellow"))
+```
+
+Straty przekroczyły zakładane poziomy VaR dla modelu GARCH(1,1) w `r sum(Portfel3$Zwroty < Portfel3$VaR) / length(Portfel3$VaR)*100` \%, dla modelu TGARCH(2,1) w `r sum(Portfel3$Zwroty < Portfel3$VaR2) / length(Portfel3$VaR2)*100` \% i dla modelu GARCH-t(1,1) w `r sum(Portfel3$Zwroty < Portfel3$VaR3) / length(Portfel3$VaR3)*100` \%.
+
+
+#Oszacowanie wartości narażonej na ryzyko w okresie out-of-sample
+
+W kolejnym kroku oszacowano prognozę VaR w okresie out-of-sample wykorzystującą jednookresowe prognozy funkcji warunkowej wariancji.
+
+```{r}
+sigma.forecast <- ugarchforecast(k.tgarch21, n.ahead = 1)
+sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+sigma.forecast3 <- ugarchforecast(k.garcht11, n.ahead = 1)
+sigma.forecast4 <- sigma.forecast3@forecast$sigmaFor[1, 1]
+```
+
+Jednodniowa prognoza VaR dla TGARCH(2,1) wynosi: `r q011 * sigma.forecast2 * 1000000`, dla GARCH-t(1,1) wynosi: `r q011 * sigma.forecast4`.
+
+Dla całego okresu out-of-sample
+```{r}
+start  <- Portfel$obs[Portfel$Date == as.Date("2009-01-06")]
+finish <- Portfel$obs[Portfel$Date == as.Date("2010-01-05")]
+Portfel4 <-Portfel[start:finish, ]
+VaR <- rep(NA, times = finish - start + 1)
+VaR2 <- rep(NA, times = finish - start + 1)
+```
+
+Wykorzystano następującą funkcję:
+```{r warning=FALSE, message=FALSE}
+for (k in start:finish) {
+  tmp.data <- Portfel[Portfel$obs <= (k - 1), ]
+  tmp.data <- tmp.data[as.Date("2000-01-05") <= tmp.data$Date, ]
+  tmp.data$rstd <- (tmp.data$Zwroty - mean(tmp.data$Zwroty, na.rm = T)) /
+                    sd(tmp.data$Zwroty, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  tmp.tgarch11 <- ugarchfit(spec = spec2, data = na.omit(tmp.data$Zwroty))
+  sigma.forecast  <- ugarchforecast(tmp.tgarch11, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR[k - start + 1] <- q01 * sigma.forecast2
+  }
+Portfel4$VaR <- VaR
+
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+for (k in start:finish) {
+  tmp.data <- Portfel[Portfel$obs <= (k - 1), ]
+  tmp.data <- tmp.data[as.Date("2000-01-05") <= tmp.data$Date, ]
+  tmp.data$rstd <- (tmp.data$Zwroty - mean(tmp.data$Zwroty, na.rm = T)) /
+                    sd(tmp.data$Zwroty, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  
+  spec3 <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+                      mean.model = list(armaOrder = c(0, 0), include.mean = F),
+                      distribution.model = "std")
+  tmp.garcht11 <- ugarchfit(spec = spec3, data = na.omit(tmp.data$Zwroty))
+  sigma.forecast <- ugarchforecast(tmp.garcht11, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR2[k - start + 1] <- q01 * sigma.forecast2
+  }
+ Portfel4$VaR2 <- VaR2 
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel4$Date, Portfel4$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie out-of-sample dla TGARCH(2,1)")
+abline(h = 0, lty = 2)
+lines(Portfel4$Date, Portfel4$VaR, type = 'l', col = "green")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel4$Date, Portfel4$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.1, 0.1), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie out-of-sample dla GARCH-t(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel4$Date, Portfel4$VaR2, type = 'l', col = "blue")
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel4$Date, Portfel4$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.15, 0.15), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie out-of-sample")
+abline(h = 0, lty = 2)
+lines(Portfel4$Date, Portfel4$VaR, type = 'l', col = "green")
+lines(Portfel4$Date, Portfel4$VaR2, type = 'l', col = "blue")
+legend("bottom", legend=c("TGARCH(2,1)","GARCH-t(1,1)"), lwd=c(2,2), col=c("green","blue"))
+```
+
+Dla modelu TGARCH(2,1) straty przekroczyły wymagany poziom VaR w `r sum(Portfel4$Zwroty < Portfel4$VaR) / length(Portfel4$VaR)*100`$\%$, a dla GARCH-t(1,1) w `r sum(Portfel4$Zwroty < Portfel4$VaR2) / length(Portfel4$VaR2)*100`$\%$.
+
+# Analiza wrażliwości
+
+W tej części przedstawiono analizę wrażliwości dla prognozy VaR z uwzględnieniem różnych przedziałów czasowych dla okresu out-of-sample. W tym celu wybrano najlepiej dopasowany model pod względem kryterii informacyjnych, które wskazywały na model GARCH-t(1,1). W tym celu do analizy wybrano okresy 3 i 6 miesięczne.
+
+Dla okresu 3-miesięcznego prognoza wygląda nastepująco:
+```{r warning=FALSE, message=FALSE}
+start  <- Portfel$obs[Portfel$Date == as.Date("2009-01-06")]
+finish <- Portfel$obs[Portfel$Date == as.Date("2009-04-06")]
+Portfel4 <-Portfel[start:finish, ]
+VaR2 <- rep(NA, times = finish - start + 1)
+
+for (k in start:finish) {
+  tmp.data <- Portfel[Portfel$obs <= (k - 1), ]
+  tmp.data <- tmp.data[as.Date("2000-01-05") <= tmp.data$Date, ]
+  tmp.data$rstd <- (tmp.data$Zwroty - mean(tmp.data$Zwroty, na.rm = T)) /
+    sd(tmp.data$Zwroty, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  
+  spec3 <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+                      mean.model = list(armaOrder = c(0, 0), include.mean = F),
+                      distribution.model = "std")
+  tmp.garcht11 <- ugarchfit(spec = spec3, data = na.omit(tmp.data$Zwroty))
+  sigma.forecast <- ugarchforecast(tmp.garcht11, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR2[k - start + 1] <- q01 * sigma.forecast2
+}
+Portfel4$VaR2 <- VaR2 
+
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+plot(Portfel4$Date, Portfel4$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.05, 0.05),format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie 3-miesięcznym out-of-sample dla GARCH-t(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel4$Date, Portfel4$VaR2, type = 'l', col = "green")
+```
+
+Dla prognozy w okresie 3-miesięcznym out-of-sample dla GARCH-t(1,1) straty w `r sum(Portfel4$Zwroty < Portfel4$VaR2) / length(Portfel4$VaR2)*100`$\%$ przypadkach przekroczyły przyjęty poziom VaR.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+start  <- Portfel$obs[Portfel$Date == as.Date("2009-01-06")]
+finish <- Portfel$obs[Portfel$Date == as.Date("2009-07-06")]
+Portfel4 <-Portfel[start:finish, ]
+VaR2 <- rep(NA, times = finish - start + 1)
+
+for (k in start:finish) {
+  tmp.data <- Portfel[Portfel$obs <= (k - 1), ]
+  tmp.data <- tmp.data[as.Date("2000-01-05") <= tmp.data$Date, ]
+  tmp.data$rstd <- (tmp.data$Zwroty - mean(tmp.data$Zwroty, na.rm = T)) /
+    sd(tmp.data$Zwroty, na.rm = T)
+  q01 <- quantile(tmp.data$rstd, 0.01, na.rm = T)
+  
+  spec3 <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+                      mean.model = list(armaOrder = c(0, 0), include.mean = F),
+                      distribution.model = "std")
+  tmp.garcht11 <- ugarchfit(spec = spec3, data = na.omit(tmp.data$Zwroty))
+  sigma.forecast <- ugarchforecast(tmp.garcht11, n.ahead = 1)
+  sigma.forecast2 <- sigma.forecast@forecast$sigmaFor[1, 1]
+  VaR2[k - start + 1] <- q01 * sigma.forecast2
+}
+Portfel4$VaR2 <- VaR2 
+
+
+
+
+plot(Portfel4$Date, Portfel4$Zwroty, col = "red", lwd = 1, type = 'l',
+     ylim = c(-0.05, 0.05), format = "%m", xlab="Miesiące", main = "Zwroty i VaR w okresie 6-miesięcznym out-of-sample dla GARCH-t(1,1)")
+abline(h = 0, lty = 2)
+lines(Portfel4$Date, Portfel4$VaR2, type = 'l', col = "green")
+```
+
+Dla prognozy w okresie 6-miesięcznym out-of-sample dla GARCH-t(1,1) straty w `r sum(Portfel4$Zwroty < Portfel4$VaR2) / length(Portfel4$VaR2)*100`$\%$ przypadkach przekroczyły przyjęty poziom VaR.
+
+
+
+
+
+# Podsumowanie
+
+W przeprowadzonym badaniu zastosowano modele klasy GARCH do analizy porównawczej ryzyka dla portfela równoważonego. W tym celu wykorzystano warunkową wariancję. Na podstawie estymacji danych okazało się, że najlepiej dopasowanym modelem jest GARCH-t. Jest to model który posiada najniższe wartości jesli chodzi o kryteria informacyjne a także jest najprostszy ze względu na małą liczbę parametrów. Oszacowano wartość narażoną na ryzyko w celu określenia straty przy zadanym poziomie tolerancji.
+
+
+
