@@ -1,0 +1,415 @@
+---
+title: "Praca Zaliczeniowa z przedmiotu <br>*Credit Scoring w R*<br>Regresja logistczna vs. XGBoost na danych German Credit Data"
+author: "Mateusz Jastrząb<br>Hubert Ratajczyk"
+date: "24 stycznia 2018"
+output: html_document
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+```{r setup, include=FALSE,error=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+load("final_enviroment_24_do_prez.RData")
+#install.packages("parallel")
+library(parallel)
+#install.packages("parallelMap")
+library(parallelMap)
+library(dplyr)
+library(ggplot2)
+#install.packages("ggpubr")
+library(ggpubr)
+#install.packages("scales")
+library(scales)
+library(moments)
+#install.packages("corrplot")
+library(corrplot)
+library(parallelMap)
+#install.packages("woeBinning")
+library(woeBinning)
+library(caret)
+library(LogisticDx) 
+library(pROC)
+library(gtools) 
+library(lmtest)
+library(ROCR)
+library(tidyr)
+#install.packages("OptimalCutpoints")
+library(OptimalCutpoints)
+library(forcats)
+```
+### Abstrakt
+
+  W poniższej pracy porównane są dwie metody modelowania ryzyka kredytowego. Klasyczna regresja logistyczna i machine learningowe podejście wykorzystujące algorytm XGBoost. W naszym porównaniu algorytm XGBoost okazuje się dawać dokładniejsze predykcje niż regresja logistyczna. W pierwszej cześci pracy opisujemy proces budowy karty scoringowej przy użyciu wyników regresji logistycznej. W drugiej części pracy opisujemy wykorzystanie algorytmu XGBoost do oszacowania pradwopodobieństwa *defaultu*. Na koniec porównujemy wyniki obu modeli.
+
+### Wstęp
+
+  W poniższej pracy porównane są dwie metody modelowania ryzyka kredytowego. Klasyczna regresja logistyczna będąca obecnie standardem rynkowym i machine learningowe podejście wykorzystujące algorytm XGBoost. Porówanie jest przeprowadzone na zbiorze German Credit Data. W obu podejściach przekształcamy zmienne zgodnie z metodologią *WoE*. Uzyskane na potrzeby obu modeli grupowania zmiennych różnią się. Oba modele zsotały oszcowane na takiej samej próbie trenującej i zwalidowane na takiej samej próbie walidującej. 
+  
+### Dane 
+
+  Zbiór German Credit Data zawiera 1000 obserwacji dotyczących przebiegu udzielonych kredytów. W danych znajdziemy 700 obserwacji zakończonych spłatą zobowiązania i 300 zakończonych *defaultem*. Zbiór pochodzi z 1994 roku i zawiera 20 zmiennych zarówno ciagłych jak i dyskretnych. 
+  
+## Charakterystyki zmiennych 
+
+  Poniżej prezentujemy histogramy wybranych zmiennych które znalazły się ostatecznie w modelu regresji logsitycznej(więcej w skrypcie). 
+  
+```{r charakt_zmiennych, echo=FALSE}
+
+plot_factor(Main.DF, "account_status")
+plot_factor(Main.DF, "credit_history")
+plot_factor(Main.DF, "purpose")
+plot_factor(Main.DF, "savings")
+plot_factor(Main.DF, "employment")
+plot_factor(Main.DF, "guarantors")
+plot_factor(Main.DF, "property")
+plot_factor(Main.DF, "age")
+plot_factor(Main.DF, "other_installments")
+plot_factor(Main.DF, "housing")
+plot_factor(Main.DF, "foreign_worker")
+# plot_factor(Main.DF, "Income")
+# plot_factor(Main.DF, "AmtTI")
+plot_factor(Main.DF, "personal_status")
+```
+
+
+  Poniżej prezentujemy wyniki testu Chi-Squared dla zmiennych kategorycznych względem zmiennej objaśnianej *defaulted*.
+
+
+```{r charakt_zmiennych_testy, echo=FALSE}
+print(Factor_summary.DF)
+```
+
+  Dla zmiennych ciągłych liczymy współczynnik korelacji Kendalla. Macierz korelacji zwiera także nowo stworzone zmienne taki jak Income i Installment(def. w skrypcie).
+  
+```{r charakt_zmiennych_testy_2, echo=FALSE}
+
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M_cor, method="color", col=col(200),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         diag=FALSE 
+)
+```
+
+### Regresja Logistyczna
+
+## Regresja Logistyczna - Grupowanie zmiennych według metodologii *WoE*
+
+  Na wykresach poniżej prezentujemy grupowanie zmiennych dykretnych i cigałych w za poomocą metodologii *WoE*.
+
+```{r woe, echo=FALSE}
+print(account_status_woe)
+print(account_status_fre)
+print(months_woe)
+print(months_fre)
+print(credit_history_woe)
+print(credit_history_fre)
+print(purpose_woe)
+print(purpose_fre)
+print(credit_amount_woe)
+print(credit_amount_fre)
+print(savings_woe)
+print(savings_fre)
+print(employment_woe)
+print(employment_fre)
+print(installment_rate_woe)
+print(installment_rate_fre)
+print(personal_status_woe)
+print(personal_status_fre)
+print(guarantors_woe)
+print(guarantors_fre)
+print(residence_woe)
+print(residence_fre)
+print(property_woe)
+print(property_fre)
+print(age_woe)
+print(age_fre)
+print(other_installments_woe)
+print(other_installments_fre)
+print(housing_woe)
+print(housing_fre)
+print(credit_cards_woe)
+print(credit_cards_fre)
+print(job_woe)
+print(job_fre)
+print(dependents_woe)
+print(dependents_fre)
+print(phone_woe)
+print(phone_fre)
+print(foreign_worker_woe)
+print(foreign_worker_fre)
+print(Installment_woe)
+print(Installment_fre)
+print(Income_woe)
+print(Income_fre)
+print(AmtTI_woe)
+print(AmtTI_fre)
+print(sex_woe)
+print(sex_fre)
+```
+
+## Regresja Logistyczna - Information Value
+
+  Poniżej prezentujemy Information Value dla zmiennych w naszy zbiorze.
+  
+```{r IV,echo=FALSE}
+print(IV_Summary.DF.prez)
+```
+## Regresja Logistyczna - Podział na próbę testową i walidacyjną
+
+  Dokonujemy podziału na próbę testową i walidacyjną w proporcji 70%/30%. Przeprowadzamy losowanie ze stratyfikacją względem zmiennej objaśnianej aby w obu próbach otrzymac zblizony poziom *default rate*. Podziału dokonujemy za pomocą fukncji *createDataPartition*(więcej szczegółów dot. podziału w skrypcie).
+  
+## Regresja Logistyczna - Estymacja modelu
+
+  Aby znaleść końcową postać modelu w pierwszej kolejności wykorzystujemy alogrytm *backward selection* na zbiorze ze zmiennymi dla których wartość *Information Value* była powyżej 2,5%. Wyniki tak uzyskanego modelu prezentujemy poniżej.
+  
+```{r backward_selection,echo=FALSE}
+print(model_stepwise_b)
+```
+
+  W kolejnych krokach wykorzystując w pewnym sensie schemat postępowania *od ogółu do szczegółu*(zaa pomocą *LR test*), sprawdzamy czy możmy usunąć z modelu zmienne które nie są istotne na 5% poziomie istotności. W ten sposób usuwamy dwie zmienne *credit_cards* i *residence*.
+  
+  Wyniki ostatecznej formy modelu prezentujemy poniżej. Przy kilku zmiennych obserwujemy że na 5% poziomie istotności nie możemy odrzucić hiptezy testu Walda o tym że Bety dla odpowiednich oszacowań są równe zero. Problemy z uzyskaniem istotnych statystycznie oszacowań mogą wynikać z niedużej próbki. Zmienne te pozostają w modelu ze względu na wyniki testu LR które odrzucają taką samą hipotezę. Otrzymane na próbie testowej accuracy ratio wynosi 76,6%.
+  
+```{r logistic_regression,echo=FALSE}
+summary(logistic_regression)
+```
+  
+## Regresja Logistyczna - Testy jakości dopasowania
+
+  Poniżej prezentujemy wyniki testu Hosmera - Lemeshowa dla 3 różnych ilości przedziałów. Odpowiednio dla 10, 9 i 8 przedziałów. Każdy z tych testów wskazuje że nie mamy podstaw do odrzuecnia Hipotezy zerowej do ddobrym dopasowaniu modelu do danych. 
+
+|        |   Wartość Statystyki    | P - Wartość | 
+|:------:|:-----------------------:|:-----------:|
+|H-L(10) | 9.624297                | 0.2923913   |
+|H-L(9)  | 4.790311                | 0.6855349   | 
+|H-L(8)  | 5.673424                | 0.4607487   |
+
+
+ Prezentujemy także tabelke z pakietu *LogisticDx* która w dogodny sposób przedstawia wyniki testów na jakość dopasowania dla regresji logistycznej. 
+
+```{r gof,echo=FALSE}
+print(gof)
+```
+ 
+## Regresja Logistyczna - Rozkład oszacowanych prawdopodobieństw *defaultu*
+
+  Przeprowadzamy test ROC w wyniku którego stwierdzamy że mamy podstawy do odrzucei hipotezy zerowej że krzywa ROC w modelu docelowym jest istotnie różna od krzywej ROC dla modelu bazowego(tylko stała, więcej w skrypcie). Wartość współczynnika Giniiego dla naszego modelu na próbie testwoej wynosi 66% (p.uf. 59% - 72% ) natomiast na próbie walidacyjnej 57% (p.uf. 46% - 68%). Ze względu na małą liczbę osberwacji przedziały ufności dla wpółczynnika Gini są bardzo szerokie. Za pomocą testu Kołomogorowa - Smironova testujemy czy rozkłady *scorea* różnią się dla dobrych i złych klientów. Zarówno dla próby testowej jak i walidacyjnej mamy silne podstawy do odrzucenia hipotezy zeroewej że wspomniane rozkłqdy są zbliżone do siebie(więcej w skyrpcie).
+  
+```{r roc,echo=FALSE, fig.align='center'}
+plot(roc(Model.DF.train$defaulted, Model.DF.train$model))
+title("ROC Curve - próba testowa")
+plot(roc(Model.DF.test$defaulted, Model.DF.test$model))
+title("ROC Curve - próba walidacyjna")
+```
+
+## Regresja Logistyczna - Stabilność modelu
+
+  Aby zweryfikować stabliność modelu wyliczamy Population Stability Index dla rozkładu *scorów* w próbie walidacyjnej i testowej. Sprawdzamy także za pomocą testu Kołomogorowa Smirnova podobieństwo rozkładu *scorów* dla próby testowej i walidacyjnej. Upewniamy się także czy nie występują zbbyt czesto identyczne wartości *scorea*.
+
+## Regresja Logistyczna - Ocena modelu i poszczególnych zmiennych
+
+  Przygotowujemy zgodnie najważniejszych charkterystyk modelu(załącznik "ocena_modelu"). Przygotoujemy także najważniejsze charkterystyki opisujące wpływ każdej ze (załącznik "ocena_zmienne").
+
+## Regresja Logistyczna - Karta scoringowa
+
+  Zgodnie z zaleceniami wyniki modelu zostały przeskalowane do scorea w taki sposób że 
+*score_points*=660, *log_odds*=1/72, *ptd*=40. Karta scoringowa znajduje się w załączniku
+"karta_scoringowa.csv".
+
+## Regresja Logistyczna - Kalibracja
+
+  Dokonujemy kalbracji karty poprzez regresję zmiennej *defaulted* na *score* i stałą. W dalszej kolejności odpowidnio skalibrowany wynik dzielimy na grupy ryzyka.
+  
+```{r calib,echo=FALSE}
+summary(model_calib)
+```
+
+## Regresja Logistyczna - Wybór punktu odcięcia
+
+  W ostatnim kroku zastanawiamy się nad wyborem punktu odcięcia. Najrosądniejsze z punktu widzenia autorów wskazanie punktu odcięcia(466.2755540) otrzymujemy z kryterium *Youden*-a. Wybierająć ten punkt odcięcia godzimy się na to że wpuścimy do portfela 39 złych klientów i odmówimy niesłusznie 133 dobrym klientom.
+  
+```{r cut,echo=FALSE}
+summary(cutpoint1)
+```
+
+### XGBoost
+
+  Przed zdefiniowaniem właściwego modelu **XGBoost**, należy spojrzeć najpierw na hasło **Boosting**. Idea procesu, jakim jest boosting powstała z potrzeby poprawiania jakości dopasowań *weak learnera* i opiera się na filtrowaniu obserwacji. *Weak learner* jest to prosty klasyfikator, który zazwyczaj radzi sobie nieco lepiej powyżej stanu losowego. Filtrowanie odbywa się w taki sposób, aby *weak learner* dostał część zbioru danych, z którymi może sobie bezproblemowo poradzić. Natomiast do pozostałych, czyli sprawiających trudność dopasowywane są kolejne jednostki *weak learnerów*.
+  
+  Pierwszym algorytmem wykorzystującym boosting z powodzeniem, był **Adaptive Boosting** lub **AdaBoost**. Tam *weak learnerzy* to drzewa decyzyjne, z pojedynczym podziałem, nazywane *decision stumps*. AdaBoost realizuje klasyfikację poprzez przypisywanie różnych wag poszczególnym obserwacjom, kładąc większy nacisk na trudne do sklasyfikowania jednostki. Kolejne drzewa decyzyjne są dodawane sekwencyjnie i skupiają się na coraz bardziej zaawansowanych wzorcach. Predykcje tworzą się poprzez głosowanie większościowe *weak learnerów*, ważone ich indywidualną dokładnością lub *accuracy*.
+  
+  Podobnym algorytmem jest **Stochastic Gradient Boosting**, gdzie w dużym uproszczeniu można przyjąć, że kolejne wagi dla *weak learnerów* są definiowane przez gradient. Nawiązując do twórcy algorytmu **XGBoost**, jego dzieło jaki i bliski krewny SGB opierają się na metodzie **gradient boosting**. Należy tutaj zauważyć, że zwykły SGB ma silną tendencję do przeuczania się, dlatego w XGBoost został dodany bardziej zregularyzowany model, aby lepiej kontrolować przeuczanie.
+  
+Do trenowania i tuningowania algorytmu użyliśmy biblioteki caret. Implementując XGBoost można ustalić następujące parametry:
+
+* nrounds - liczba iteracji, które model wykona zanim się zatrzyma,
+* max_dept - maksymalna głębokość pojedynczego drzewa,
+* eta - *learning rate*, czyli stopa kurczenia się wag dla zmiennych.
+* gamma - minimalna redukcja straty,
+* colsample_bytree - losowo wybierana ilość zmiennych, spośród wszystkich zmiennych w macierzy wejściowej,
+* min_child_weight - minimalna suma wag w węźle,
+* subsample - odsetek danych pobieranych do hodowania drzew decyzyjnych,
+
+oraz wiele innych, których lista dostępna jest pod adresem https://github.com/dmlc/xgboost/blob/master/doc/parameter.md, ale my skupimy się na powyższych 7.
+
+Tuningowanie parametrów w XGBoost jest dość czasochłonnym procesem. Szczególnie, jeżeli przyjmujemy metodę *grid search*. Wtedy, mając do wyboru 7 parametrów i przeszukując tylko po 3 wartości z każdego, daje to $3^7$ modeli do kroswalidacji. W związku z tym, najpierw użyliśmy metody bayesowskiej optymalizacji (znacznie szybciej), której implementacja widoczna jest poniżej.
+
+```{r echo = TRUE, eval = FALSE}
+#install.packages("rBayesianOptimization")
+#install.packages("xgboost")
+require(rBayesianOptimization)
+require(xgboost)
+
+train.label = Model.DF.train$defaulted
+new_tr <- model.matrix(~.+0,data = Model.DF.train[,-which(colnames(Model.DF.train) == "defaulted")])
+
+dtrain <- xgb.DMatrix(new_tr,
+                      label = train.label)
+
+
+cv_folds <- KFold(train.label, nfolds = 10,
+                  stratified = TRUE, seed = 2017)
+
+xgb_cv_bayes <- function(max.depth, min_child_weight, subsample, eta, gamma, colsample_bytree, nrounds) {
+  cv <- xgb.cv(params = list(booster = "gbtree",
+                             eta = eta,
+                             max_depth = max.depth,
+                             min_child_weight = min_child_weight,
+                             subsample = subsample, colsample_bytree = colsample_bytree,
+                             gamma = gamma,
+                             lambda = 1, alpha = 0,
+                             objective = "binary:logistic",
+                             eval_metric = "auc"),
+               data = dtrain, nround = 100,
+               folds = cv_folds, prediction = TRUE, showsd = TRUE,
+               early_stopping_rounds = 25, maximize = TRUE, verbose = 0)
+  list(Score = cv$evaluation_log[, max(test_auc_mean)],
+       Pred = cv$pred)
+}
+
+OPT_Res <- BayesianOptimization(xgb_cv_bayes,bounds = list(max.depth = c(3:12),
+                                                           min_child_weight = c(0.5, 1, 2,5),
+                                                           subsample = c(0.5, 0.8),
+                                                           eta = c(0.01,0.1,0.3),
+                                                           gamma = c(0.1,1, 2,5),
+                                                           colsample_bytree = c(0.4, 0.7, 1.0)
+),
+init_grid_dt = NULL, init_points = 10, n_iter = 40,
+acq = "ucb", kappa = 2.576, eps = 0.0,
+verbose = TRUE)
+
+```
+
+Otrzymane parametry zaimplementowaliśmy w funkcji z pakietu caret używając 5-krotnie powtarzanej 10-krotnej kroswalidacji.
+
+```{r echo = FALSE, eval = FALSE}
+parallelStartSocket(cpus = detectCores())
+```
+
+```{r echo = FALSE, eval = TRUE}
+
+myControl <- trainControl(
+  method = "repeatedcv",
+  number=10,
+  repeats=5,
+  classProbs = TRUE,
+  allowParallel = TRUE,
+  savePredictions="final"
+)
+
+
+xgb.grid <- expand.grid(nrounds = 50,
+                        eta = 0.3,
+                        max_depth = 2,
+                        gamma = 0,
+                        colsample_bytree = 0.6,
+                        min_child_weight =1,
+                        subsample = 1
+                        )
+
+
+
+
+Model.DF.train.xgb = Model.DF.train[,1:25]
+Model.DF.test.xgb = Model.DF.test[,1:25]
+
+Model.DF.train.xgb$defaulted = recode_factor(Model.DF.train.xgb$defaulted, '1' = 'Defaulted', '0' = 'Nondefaulted')
+Model.DF.test.xgb$defaulted = recode_factor(Model.DF.test.xgb$defaulted, '1' = 'Defaulted', '0' = 'Nondefaulted')
+
+model_xgb = caret::train(
+  form = defaulted ~ .,
+  data = Model.DF.train.xgb,
+  metric = "Accuracy",
+  method = "xgbTree",
+  tuneGrid  = xgb.grid,
+  nthread = 4,
+  trControl = myControl
+)
+
+KS <- function(pred,depvar){
+  p   <- ROCR::prediction(as.numeric(pred),depvar)
+  perf <- ROCR::performance(p, "tpr", "fpr")
+  ks <- max(attr(perf, "y.values")[[1]] - (attr(perf, "x.values")[[1]])) %>% round(4)
+  return(ks)
+}
+
+AUC <- function(pred,depvar){
+  p   <- ROCR::prediction(as.numeric(pred),depvar)
+  auc <- ROCR::performance(p,"auc")
+  auc <- unlist(slot(auc, "y.values")) %>% round(4)
+  return(auc)
+}
+
+
+```
+
+Ponieważ jest to algorytm oparty na drzewach decyzyjnych, możliwe jest uzyskanie wykresu *ważności zmiennych*, czyli ustalonej przez model hierarchii zmiennych wykorzystanych do predykcji.
+
+```{r echo = FALSE, fig.align='center'}
+plot(varImp(model_xgb))
+
+```
+
+Pamiętając wartości Information Value dla poszczególnych zmiennych, wcale nie dziwi czołowa pozycja account_status (IV = 0.639), credit_history (0.292), ale zadziwiające może być purpose, sklasyfikowane przez nas na podstawie IV raczej w środku stawki (0.15). Być może model dzięki tej zmiennej uzyskał sensowne i ważne interakcje.
+
+Dobieramy cutoff, aby maksymalizował dokładność. Wykres dokładności od wartości punktu odcięcia przedstawiamy poniżej. Prezentujemy także macierz pomyłek. Dokładność na zbiorze testowym wynoszącą 76% jest raczej średnią wartością jak na możliwości XGBoost. Zadziwiająca jest niska swoistość, znacznie mniejsza od czułości. 
+
+```{r echo = FALSE, fig.align='center'}
+Temp.DF = Model.DF.train$defaulted %>% as.data.frame()
+Temp.DF$model = predict(model_xgb, newdata = Model.DF.train, type = "prob")
+
+Pred.DF = Model.DF.test$defaulted %>% as.data.frame()
+Pred.DF$model_pred = predict(model_xgb, newdata = Model.DF.test, type = "prob")
+
+acc.perf = ROCR::performance(prediction(Pred.DF$model_pred$Defaulted,Pred.DF$.),measure = "acc")
+plot(acc.perf, col = "red", main = "Accuracy as function of cutoff")
+ind = which.max( slot(acc.perf, "y.values")[[1]] )
+acc = slot(acc.perf, "y.values")[[1]][ind]
+cutoff = slot(acc.perf, "x.values")[[1]][ind]
+
+Pred.DF$raw_predictions = ifelse(Pred.DF$model_pred$Defaulted >= cutoff, 1, 0) %>% as.factor()
+
+confusionMatrix(Pred.DF$., Pred.DF$raw_predictions)
+
+```
+
+Poniżej zawarty jest wykres ROC.
+
+```{r echo = FALSE,fig.align='center'}
+model_xgb_roc = ROCR::performance(prediction(Pred.DF$model_pred$Defaulted,Pred.DF$.),"tpr","fpr")
+
+plot(model_xgb_roc, lwd = 2, col = "black",  main="XGBoost ROC")
+abline(0, 1, col= "red")
+
+```
+
+Na zbiorze testowym udało nam się otrzymać współczynnik Giniego wynoszący 0.56 oraz statystykę KS 0.43
+
+### Wnioski
+
+W powyższej pracy porównaliśmy pod kątem Credit Scoringu dwa modele - regresję logistyczną oraz XGBoost. Na wspólnej próbie testowej otrzymaliśmy bardzo podobne wartości Accuracy oraz Gini. Na tej podstawie nie można jednoznacznie stwierdzić, że jeden model jest lepszy od drugiego. Spodziewaliśmy się znacznej przewagi XGBoost, ponieważ jest to algorytm z reguły dobrze dopasowujący się do trudnych obserwacji oraz dopuszczający nietrywialne interakcje. Oba modele niesłusznie odrzuciły dość dużą ilość aplikacji.  Problemem może być dość mała wielkość próbki - zaledwie 1000 obserwacji, co pociąga za sobą specyficzny charakter danych. W celu usprawnienia działania klasyfikacji proponujemy poszukanie modelu, który maksymalizowałby swoistość i być może stworzenie stackowanego algorytmu. Pomocne może być także grupowanie i segmentacja problematycznych klientów w celu odnalezienia nietrywialnych wzorców.
